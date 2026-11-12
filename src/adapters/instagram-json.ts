@@ -1,7 +1,9 @@
 import { calmTitle } from "../core/dehype.js";
+import { gradedDrop, hardRemoval } from "../core/sink.js";
 import {
   isRecord,
   type BatchDecider,
+  type DropSink,
   type FeedItem,
   type FeedSurface,
   type JsonRecord,
@@ -72,6 +74,7 @@ function extractIgMedia(media: JsonRecord, surface: FeedSurface): FeedItem | nul
     creatorHandle,
     isFollowed,
     surface,
+    altId: typeof media.code === "string" ? media.code : undefined,
     titleOrText: captionText || `@${creatorHandle ?? "reel"}`,
     secondaryText,
     durationSec,
@@ -96,6 +99,7 @@ export async function filterInstagramJson(
   config: SieveConfig,
   decide: BatchDecider,
   pageUrl?: string,
+  sink?: DropSink,
 ): Promise<unknown> {
   if (!config.enabled || !config.instagram.enabled) return data;
   if (!isRecord(data)) return data;
@@ -137,6 +141,7 @@ export async function filterInstagramJson(
       const media = getMediaFromEdge(edge);
       if (!media) continue;
       if (isMediaAd(media, node)) {
+        hardRemoval(sink, "instagram", "ad");
         edges.splice(i, 1);
         i--;
         continue;
@@ -170,6 +175,7 @@ export async function filterInstagramJson(
       const media = isRecord(entry) && isRecord(entry.media) ? entry.media : isRecord(entry) ? entry : null;
       if (!media) continue;
       if (isMediaAd(media, isRecord(entry) ? entry : undefined)) {
+        hardRemoval(sink, "instagram", "ad");
         items.splice(i, 1);
         continue;
       }
@@ -195,12 +201,14 @@ export async function filterInstagramJson(
       const entry = feedItems[i];
       if (!isRecord(entry)) continue;
       if (config.instagram.hideClutter && (entry.suggested_users || entry.explore_story || entry.clips_netego)) {
+        hardRemoval(sink, "instagram", "suggested");
         feedItems.splice(i, 1);
         continue;
       }
       const media = isRecord(entry.media_or_ad) ? entry.media_or_ad : null;
       if (!media) continue;
       if (isMediaAd(media, entry)) {
+        hardRemoval(sink, "instagram", "ad");
         feedItems.splice(i, 1);
         continue;
       }
@@ -232,7 +240,7 @@ export async function filterInstagramJson(
 
     for (let i = slot.list.length - 1; i >= 0; i--) {
       const id = slot.getMediaId(slot.list[i]);
-      if (id && droppedIds.has(id)) {
+      if (id && droppedIds.has(id) && gradedDrop(sink, candidates.get(id), id)) {
         slot.list.splice(i, 1);
       }
     }

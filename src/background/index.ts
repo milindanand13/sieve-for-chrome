@@ -1,6 +1,6 @@
 import { clearDeArrowCache, lookupDeArrowTitles } from "../core/dearrow.js";
 import { gradeItemsBatch } from "../core/llm.js";
-import { runSieveOnBatch } from "../core/sieve.js";
+import { runSieveDetailed } from "../core/sieve.js";
 import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
 import {
   isRecord,
@@ -15,7 +15,9 @@ import {
 } from "../types.js";
 import { createMemoryStore } from "./memory.js";
 import { createNoveltyMemory } from "./novelty.js";
+import { addFixture } from "./fixtures.js";
 import { rewriteResponseBody } from "./rewrite.js";
+import { createStats } from "./stats.js";
 import { matchesInterceptUrl, MAX_STREAM_BYTES } from "../shared/intercept.js";
 
 let config: SieveConfig = structuredClone(DEFAULT_CONFIG);
@@ -38,6 +40,11 @@ const seeds: SeedSets = {
   hnChannels: new Set(),
   slopChannels: new Set(),
 };
+
+const stats = createStats({
+  get: (key) => chrome.storage.local.get(key),
+  set: (items) => chrome.storage.local.set(items),
+});
 
 const memory = createMemoryStore();
 const novelty = createNoveltyMemory();
@@ -73,7 +80,8 @@ async function initConfigAndSeeds(): Promise<void> {
 
 let ready: Promise<void> | undefined;
 function ensureReady(): Promise<void> {
-  ready ??= initConfigAndSeeds();
+  // Await IndexedDB hydration so the first batch after a wake sees cached verdicts.
+  ready ??= Promise.all([initConfigAndSeeds(), memory.ready, novelty.ready]).then(() => undefined);
   return ready;
 }
 
@@ -83,11 +91,19 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-const decideBatch = async (items: FeedItem[]): Promise<Set<string>> => {
-  const dropped = await runSieveOnBatch(items, config, seeds, memory, fetch, novelty);
+// The one place a rule or grader drop is decided, counted and logged (id -> reason).
+async function evaluate(items: FeedItem[], docKey: string): Promise<Map<string, string>> {
+  const dropped = await runSieveDetailed(items, config, seeds, memory, fetch, novelty, {
+    onGraderError: () => void stats.bumpDiag().catch(() => undefined),
+  });
+  await stats.record(docKey, items, dropped).catch(() => undefined);
   if (dropped.size > 0) await setSessionCount((await getSessionCount()) + dropped.size);
   return dropped;
-};
+}
+
+function docKeyOf(sender: chrome.runtime.MessageSender): string {
+  return sender.documentId ?? `${sender.tab?.id ?? "x"}:${sender.frameId ?? 0}`;
+}
 
 function parseGraderOverride(raw: unknown): GraderSettings | undefined {
   if (!isRecord(raw)) return undefined;
@@ -130,9 +146,15 @@ function handle(
     ) {
       return Promise.resolve({ body: null });
     }
-    return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, decideBatch).then(
-      (body) => ({ body }),
-    );
+    const docKey = docKeyOf(sender);
+    return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, {
+      evaluate: (items) => evaluate(items, docKey),
+      recordFixture: addFixture,
+    }).then(async (res) => {
+      if (!res) return { body: null };
+      await stats.recordRemoved(res.hard).catch(() => undefined);
+      return { body: res.body, dimmed: res.dimmed };
+    });
   }
 
   if (raw.type === "GET_STATUS") {
@@ -153,6 +175,10 @@ function handle(
     novelty.clear();
     clearDeArrowCache();
     return Promise.all([setSessionCount(0), memory.clear()]).then(() => ({ ok: true }));
+  }
+
+  if (raw.type === "CLEAR_VERDICT_CACHE") {
+    return memory.clear().then(() => ({ ok: true }));
   }
 
   if (raw.type === "RECORD_DWELL" && typeof raw.text === "string") {
@@ -179,8 +205,11 @@ function handle(
       (item): item is FeedItem =>
         isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string",
     );
-    return decideBatch(items).then(
-      (dropped): EvaluateSsrItemsResponse => ({ dropped: [...dropped] }),
+    return evaluate(items, docKeyOf(sender)).then(
+      (dropped): EvaluateSsrItemsResponse => ({
+        dropped: [...dropped.keys()],
+        reasons: Object.fromEntries(dropped),
+      }),
     );
   }
 

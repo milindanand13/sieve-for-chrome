@@ -1,8 +1,10 @@
 import { getCachedDeArrowTitle, isVagueClickbaitTitle } from "../core/dearrow.js";
+import { gradedDrop, hardRemoval } from "../core/sink.js";
 import { calmTitle, isYouTubeSafeRoute, midFrameThumbUrl } from "../core/dehype.js";
 import {
   isRecord,
   type BatchDecider,
+  type DropSink,
   type FeedItem,
   type FeedSurface,
   type JsonRecord,
@@ -282,6 +284,7 @@ export async function filterYouTubeJson(
   pageUrl: string,
   config: SieveConfig,
   decide: BatchDecider,
+  sink?: DropSink,
 ): Promise<unknown> {
   if (!config.enabled || !config.youtube.enabled) return data;
   if (!isRecord(data) && !Array.isArray(data)) return data;
@@ -307,14 +310,17 @@ export async function filterYouTubeJson(
 
     for (const key of Object.keys(node)) {
       if (AD_AND_NOISE_KEYS.has(key)) {
+        hardRemoval(sink, "youtube", "ad");
         delete node[key];
         return Object.keys(node).length === 0;
       }
       if (config.youtube.hideShorts && SHORTS_KEYS.has(key)) {
+        hardRemoval(sink, "youtube", "shorts");
         delete node[key];
         return Object.keys(node).length === 0;
       }
       if (config.youtube.hideShorts && key === "gridShelfViewModel" && containsShortsUrl(node[key])) {
+        hardRemoval(sink, "youtube", "shorts");
         delete node[key];
         return Object.keys(node).length === 0;
       }
@@ -322,10 +328,12 @@ export async function filterYouTubeJson(
 
     if (isRecord(node.lockupViewModel)) {
       if (isMixLockup(node.lockupViewModel)) {
+        hardRemoval(sink, "youtube", "mix");
         delete node.lockupViewModel;
         return Object.keys(node).length === 0;
       }
       if (config.youtube.hideShorts && containsShortsUrl(node.lockupViewModel)) {
+        hardRemoval(sink, "youtube", "shorts");
         delete node.lockupViewModel;
         return Object.keys(node).length === 0;
       }
@@ -339,6 +347,7 @@ export async function filterYouTubeJson(
       const renderer = node[key];
       if (!isRecord(renderer)) continue;
       if (config.youtube.hideShorts && containsShortsUrl(renderer.navigationEndpoint)) {
+        hardRemoval(sink, "youtube", "shorts");
         delete node[key];
         return Object.keys(node).length === 0;
       }
@@ -389,7 +398,7 @@ export async function filterYouTubeJson(
 
     if (isRecord(node.lockupViewModel)) {
       const id = typeof node.lockupViewModel.contentId === "string" ? node.lockupViewModel.contentId : "";
-      if (id && droppedIds.has(id)) {
+      if (id && droppedIds.has(id) && gradedDrop(sink, candidates.get(id), id)) {
         delete node.lockupViewModel;
         return Object.keys(node).length === 0;
       }
@@ -400,7 +409,7 @@ export async function filterYouTubeJson(
       const renderer = node[key];
       if (!isRecord(renderer)) continue;
       const id = typeof renderer.videoId === "string" ? renderer.videoId : "";
-      if (id && droppedIds.has(id)) {
+      if (id && droppedIds.has(id) && gradedDrop(sink, candidates.get(id), id)) {
         delete node[key];
         return Object.keys(node).length === 0;
       }
@@ -465,6 +474,7 @@ export async function rewriteYouTubeHtmlInitialData(
   pageUrl: string,
   config: SieveConfig,
   decide: BatchDecider,
+  sink?: DropSink,
 ): Promise<string> {
   if (!config.enabled || !config.youtube.enabled) return html;
   const markerMatch = /(?:var\s+ytInitialData|window\["ytInitialData"\])\s*=\s*\{/.exec(html);
@@ -476,7 +486,7 @@ export async function rewriteYouTubeHtmlInitialData(
 
   try {
     const parsed: unknown = JSON.parse(html.slice(openBrace, closeBrace + 1));
-    const filtered = await filterYouTubeJson(parsed, "/youtubei/v1/browse", pageUrl, config, decide);
+    const filtered = await filterYouTubeJson(parsed, "/youtubei/v1/browse", pageUrl, config, decide, sink);
     const safeSerialized = JSON.stringify(filtered).replace(/<\//g, "<\\/");
     return html.slice(0, openBrace) + safeSerialized + html.slice(closeBrace + 1);
   } catch {

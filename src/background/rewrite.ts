@@ -2,65 +2,87 @@ import { filterInstagramJson } from "../adapters/instagram-json.js";
 import { filterTikTokJson } from "../adapters/tiktok-json.js";
 import { filterTwitterJson } from "../adapters/twitter-json.js";
 import { filterYouTubeJson } from "../adapters/youtube-json.js";
-import type { FeedItem, SieveConfig } from "../types.js";
-
-type DecideBatch = (items: FeedItem[]) => Promise<Set<string>>;
+import { createSink } from "../core/sink.js";
+import type { FeedItem, Platform, RewriteResult, SieveConfig } from "../types.js";
 
 const TWITTER_TIMELINE_RE =
   /\/i\/api\/graphql\/[^/]+\/(HomeTimeline|HomeLatestTimeline|ExplorePage|GenericTimelineById|ExploreSidebar|SearchTimeline)/;
 
-export function shouldFilterUrl(url: URL, config: SieveConfig): boolean {
-  if (!config.enabled) return false;
-  const host = url.hostname;
-  const path = url.pathname;
-  if (host.endsWith("youtube.com")) {
-    return config.youtube.enabled && path.startsWith("/youtubei/v1/");
-  }
-  if (host === "x.com" || host === "twitter.com") {
-    return config.x.enabled && TWITTER_TIMELINE_RE.test(path);
-  }
-  if (host.endsWith("instagram.com")) {
-    return (
-      config.instagram.enabled &&
-      (path === "/graphql/query" ||
-        path.startsWith("/api/v1/clips/home") ||
-        path.startsWith("/api/v1/feed/timeline"))
-    );
-  }
-  if (host.endsWith("tiktok.com")) {
-    return (
-      config.tiktok.enabled &&
-      (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"))
-    );
-  }
-  return false;
+export function siteForHost(host: string): Platform | null {
+  if (host.endsWith("youtube.com")) return "youtube";
+  if (host === "x.com" || host === "twitter.com") return "x";
+  if (host.endsWith("instagram.com")) return "instagram";
+  if (host.endsWith("tiktok.com")) return "tiktok";
+  return null;
 }
 
-/** Returns the rewritten body, or null to leave the response untouched. Never throws. */
+export function shouldFilterUrl(url: URL, config: SieveConfig): boolean {
+  if (!config.enabled) return false;
+  const path = url.pathname;
+  switch (siteForHost(url.hostname)) {
+    case "youtube":
+      return config.youtube.enabled && path.startsWith("/youtubei/v1/");
+    case "x":
+      return config.x.enabled && TWITTER_TIMELINE_RE.test(path);
+    case "instagram":
+      return (
+        config.instagram.enabled &&
+        (path === "/graphql/query" ||
+          path.startsWith("/api/v1/clips/home") ||
+          path.startsWith("/api/v1/feed/timeline"))
+      );
+    case "tiktok":
+      return (
+        config.tiktok.enabled &&
+        (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"))
+      );
+    default:
+      return false;
+  }
+}
+
+export interface RewriteDeps {
+  /** Rule + grader decision for a batch: id -> reason for every dropped item. */
+  evaluate: (items: FeedItem[]) => Promise<Map<string, string>>;
+  /** Dev recorder sink; only called when config.recorder.enabled. */
+  recordFixture?: (site: string, url: string, body: string) => Promise<void>;
+}
+
+/** Returns the rewritten body plus dim/removal lists, or null to leave the response untouched. Never throws. */
 export async function rewriteResponseBody(
   rawUrl: string,
   pageUrl: string,
   text: string,
   config: SieveConfig,
-  decideBatch: DecideBatch,
-): Promise<string | null> {
+  deps: RewriteDeps,
+): Promise<RewriteResult | null> {
   try {
     const url = new URL(rawUrl);
+    const site = siteForHost(url.hostname);
+    if (config.recorder.enabled && site && deps.recordFixture) {
+      await deps.recordFixture(site, rawUrl, text).catch(() => undefined);
+    }
     if (!shouldFilterUrl(url, config)) return null;
+
     const json: unknown = JSON.parse(text);
-    const host = url.hostname;
+    const sink = createSink(config.display.hideDropped);
+    const decide = async (items: FeedItem[]): Promise<Set<string>> => {
+      const dropped = await deps.evaluate(items);
+      for (const [id, reason] of dropped) sink.reasons.set(id, reason);
+      return new Set(dropped.keys());
+    };
     const path = url.pathname;
     let out: unknown = json;
-    if (host.endsWith("youtube.com")) {
-      out = await filterYouTubeJson(json, path, pageUrl, config, decideBatch);
-    } else if (host === "x.com" || host === "twitter.com") {
-      out = await filterTwitterJson(json, path, config, decideBatch);
-    } else if (host.endsWith("instagram.com")) {
-      out = await filterInstagramJson(json, path, config, decideBatch, pageUrl);
-    } else if (host.endsWith("tiktok.com")) {
-      out = await filterTikTokJson(json, config, decideBatch, path, pageUrl);
+    if (site === "youtube") {
+      out = await filterYouTubeJson(json, path, pageUrl, config, decide, sink);
+    } else if (site === "x") {
+      out = await filterTwitterJson(json, path, config, decide, sink);
+    } else if (site === "instagram") {
+      out = await filterInstagramJson(json, path, config, decide, pageUrl, sink);
+    } else if (site === "tiktok") {
+      out = await filterTikTokJson(json, config, decide, path, pageUrl);
     }
-    return JSON.stringify(out);
+    return { body: JSON.stringify(out), dimmed: sink.dimmed, hard: sink.hard };
   } catch {
     return null;
   }

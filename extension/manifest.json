@@ -58,7 +58,8 @@
         "*://*.youtube.com/*"
       ],
       "css": [
-        "styles/youtube.css"
+        "styles/youtube.css",
+        "styles/dim.css"
       ],
       "js": [
         "dist/content-youtube.js"
@@ -83,7 +84,8 @@
         "*://*.twitter.com/*"
       ],
       "css": [
-        "styles/twitter.css"
+        "styles/twitter.css",
+        "styles/dim.css"
       ],
       "js": [
         "dist/content-twitter.js"
@@ -108,7 +110,8 @@
         "*://*.instagram.com/*"
       ],
       "css": [
-        "styles/instagram.css"
+        "styles/instagram.css",
+        "styles/dim.css"
       ],
       "js": [
         "dist/content-instagram.js"

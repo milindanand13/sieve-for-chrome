@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
 import { INTERCEPT_TAG } from "../shared/intercept.js";
-import { isRecord, type FeedItem, type SieveConfig } from "../types.js";
+import { isRecord, type DimEntry, type FeedItem, type SieveConfig } from "../types.js";
 
 const LOCAL_CACHE_KEY = "__sieve_cached_flags_v1";
 
@@ -54,13 +54,94 @@ export function installInterceptRelay(): void {
       window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
     chrome.runtime
       .sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body })
-      .then((res: unknown) => reply(isRecord(res) && typeof res.body === "string" ? res.body : null))
+      .then((res: unknown) => {
+        if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed as DimEntry[]);
+        reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
+      })
       .catch(() => reply(null));
   });
 }
 
+// ---- Dimming: graded drops stay in the page; matching cards get a data attribute and a label.
+const dimReasons = new Map<string, string>();
+const DIM_CAP = 1500;
+
+export interface DimSite {
+  cards: () => Iterable<HTMLElement>;
+  /** Every identifier the card exposes (video id, status id, shortcode, href). */
+  idsOf: (card: HTMLElement) => string[];
+}
+let dimSite: DimSite | undefined;
+
+export function markCard(card: HTMLElement, reason: string, direct = false): void {
+  if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
+  if (direct) card.dataset.sieveDimDirect = "1";
+  let label = card.querySelector<HTMLElement>(":scope > .sieve-label");
+  if (!label) {
+    label = document.createElement("span");
+    label.className = "sieve-label";
+    card.prepend(label);
+  }
+  const text = `sieve: ${reason}`;
+  if (label.textContent !== text) label.textContent = text;
+  card.dataset.sieveDimReason = reason;
+}
+
+function unmarkCard(card: HTMLElement): void {
+  delete card.dataset.sieveDim;
+  delete card.dataset.sieveDimReason;
+  card.querySelector(":scope > .sieve-label")?.remove();
+}
+
+export function rememberDim(id: string, reason: string): void {
+  if (!id) return;
+  if (!dimReasons.has(id) && dimReasons.size >= DIM_CAP) {
+    dimReasons.delete(dimReasons.keys().next().value!);
+  }
+  dimReasons.set(id, reason);
+}
+
+function scanDims(): void {
+  if (!dimSite) return;
+  for (const card of dimSite.cards()) {
+    const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
+    if (reason) markCard(card, reason);
+    else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
+  }
+}
+const scheduleDimScan = createRafScheduler(scanDims);
+
+export function registerDimmed(entries: DimEntry[]): void {
+  for (const e of entries) {
+    rememberDim(e.id, e.reason);
+    if (e.alt) rememberDim(e.alt, e.reason);
+  }
+  scheduleDimScan();
+}
+
+/** Re-marks dimmed cards whenever the SPA re-renders. */
+export function installDimMarker(site: DimSite): void {
+  dimSite = site;
+  const observe = (): void => {
+    new MutationObserver(scheduleDimScan).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+    scheduleDimScan();
+  };
+  if (document.documentElement) observe();
+  else document.addEventListener("DOMContentLoaded", observe, { once: true });
+}
+
 export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
   installInterceptRelay();
+  const baseOnConfig = onConfig;
+  onConfig = (cfg) => {
+    if (document.documentElement) {
+      document.documentElement.dataset.sieveHide = cfg.display.hideDropped ? "1" : "0";
+    }
+    baseOnConfig(cfg);
+  };
   const cached = readCachedFlags();
   if (document.documentElement) {
     for (const [k, v] of Object.entries(cached)) {
@@ -111,7 +192,7 @@ export function createRafScheduler(run: () => void): () => void {
 
 export async function evaluateDomBatch(
   items: FeedItem[],
-  onDrop: (id: string) => void,
+  onDrop: (id: string, reason: string) => void,
 ): Promise<void> {
   if (items.length === 0) return;
   try {
@@ -120,8 +201,12 @@ export async function evaluateDomBatch(
       items,
     });
     if (!isRecord(res) || !Array.isArray(res.dropped)) return;
+    const reasons = isRecord(res.reasons) ? res.reasons : {};
     for (const id of res.dropped) {
-      if (typeof id === "string") onDrop(id);
+      if (typeof id === "string") {
+        const r = reasons[id];
+        onDrop(id, typeof r === "string" ? r : "dropped");
+      }
     }
   } catch {
     // Background reload fails open without hiding cards.

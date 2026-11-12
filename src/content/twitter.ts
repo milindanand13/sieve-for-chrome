@@ -6,8 +6,11 @@ import {
   createDwellTracker,
   createRafScheduler,
   evaluateDomBatch,
+  installDimMarker,
   installMidFrameThumbFallback,
+  markCard,
   rememberBounded,
+  rememberDim,
 } from "./shared.js";
 
 const BIRD_FAVICON =
@@ -82,9 +85,11 @@ async function evaluateExploreCells(): Promise<void> {
     }
   });
 
-  await evaluateDomBatch(batch, (dropId) => {
+  await evaluateDomBatch(batch, (dropId, reason) => {
+    rememberDim(dropId, reason);
     const cell = cellById.get(dropId);
-    if (cell) cell.dataset.sieveXDropped = "1";
+    // Trend cells have no id the DOM exposes later, so they are marked directly.
+    if (cell) markCard(cell, reason, !/^\d+$/.test(dropId));
   });
 }
 
@@ -121,6 +126,17 @@ function polishTimelineDom(): void {
 }
 
 const schedulePolish = createRafScheduler(polishTimelineDom);
+
+installDimMarker({
+  cards: () => document.querySelectorAll<HTMLElement>('[data-testid="cellInnerDiv"]'),
+  idsOf: (cell) => {
+    const href = cell
+      .querySelector('[data-testid="tweet"] a[href*="/status/"]')
+      ?.getAttribute("href");
+    const m = /\/status\/(\d+)/.exec(href ?? "");
+    return m?.[1] ? [m[1]] : [];
+  },
+});
 
 bootSiteAdapter((cfg) => {
   activeConfig = cfg;

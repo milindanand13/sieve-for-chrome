@@ -124,6 +124,3 @@ html[data-sieve-yt-on="1"] ytd-rich-grid-row > #contents {
   display: contents !important;
 }
 
-html[data-sieve-yt-on="1"] [data-sieve-yt-dropped="1"] {
-  display: none !important;
-}
