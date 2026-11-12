@@ -15,6 +15,7 @@ const rows = JSON.parse(readFileSync(input, "utf8"));
 if (!Array.isArray(rows)) throw new Error("expected an array of {site,url,body}");
 
 const counts = {};
+const urls = {};
 for (const row of rows) {
   if (typeof row?.site !== "string" || typeof row.body !== "string") continue;
   const site = row.site.replace(/[^a-z0-9_-]/gi, "");
@@ -22,5 +23,7 @@ for (const row of rows) {
   const dir = path.join(rootDir, "tests", "fixtures", site);
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, `${n}.json`), row.body);
+  urls[`${site}/${n}`] = row.url; // lets tests/fixtures.test.ts pick the right endpoint
 }
+writeFileSync(path.join(rootDir, "tests", "fixtures", "urls.json"), JSON.stringify(urls, null, 1));
 console.log(`Wrote ${Object.values(counts).reduce((a, b) => a + b, 0)} fixtures to tests/fixtures/`);

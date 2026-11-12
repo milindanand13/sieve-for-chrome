@@ -14,6 +14,7 @@ function walkTextFiles(dir: string, out: string[] = []): string[] {
       entry.name === ".web-ext-artifacts" ||
       entry.name === "vendor" ||
       entry.name === "seeds" ||
+      entry.name === "fixtures" ||
       entry.name === "fonts"
     ) {
       continue;
