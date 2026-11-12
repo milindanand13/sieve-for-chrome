@@ -380,3 +380,20 @@ details.more .sub-group:last-child {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 4px 8px;
+  vertical-align: top;
+}
+
+.data-table th {
+  font-weight: 600;
+}

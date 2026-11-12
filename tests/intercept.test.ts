@@ -15,7 +15,7 @@ describe("intercept url list", () => {
 });
 
 describe("rewriteResponseBody", () => {
-  const decide = async () => new Set<string>();
+  const decide = { evaluate: async () => new Map<string, string>() };
   const url = "https://x.com/i/api/graphql/abc/HomeTimeline";
 
   it("fails open (null) on unparseable bodies and disabled config", async () => {
@@ -26,6 +26,6 @@ describe("rewriteResponseBody", () => {
 
   it("returns re-serialized JSON for a filtered endpoint", async () => {
     const out = await rewriteResponseBody(url, "https://x.com/home", "{}", DEFAULT_CONFIG, decide);
-    expect(out).toBe("{}");
+    expect(out).toEqual({ body: "{}", dimmed: [], hard: [] });
   });
 });

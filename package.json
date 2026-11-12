@@ -7,6 +7,7 @@
   "scripts": {
     "seeds": "node scripts/build-seeds.mjs",
     "build": "node scripts/build.mjs",
+    "fixtures": "node scripts/import-fixtures.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'vendor/**'"
   },

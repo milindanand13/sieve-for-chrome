@@ -248,9 +248,15 @@
 
 Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
+Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
+
+KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
+- photography
+- filmmaking and cinematography
+- media: journalism, criticism, and production
+- outdoor sports`;
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
-  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
+  var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
     schemaVersion: SCHEMA_VERSION,
     enabled: true,
@@ -281,7 +287,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       hideClutter: true
     },
     tiktok: {
-      enabled: true,
+      enabled: false,
       caliberFilter: true,
       cleanChrome: true,
       lightMode: true,
@@ -295,6 +301,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       rubric: DEFAULT_RUBRIC,
       streamHoldMs: 1500
     },
+    display: { hideDropped: false },
+    recorder: { enabled: false },
     allowHandles: [],
     blockHandles: []
   };
@@ -312,6 +320,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
     const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
+    const disp = isRecord(stored.display) ? stored.display : {};
+    const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
     const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
     return {
@@ -358,6 +368,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
+      display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
+      recorder: { enabled: bool(rec, "enabled", d.recorder.enabled) },
       allowHandles: readStringList(stored.allowHandles),
       blockHandles: readStringList(stored.blockHandles)
     };
@@ -431,11 +443,65 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       }
       const id = d.id;
       const reply = (body) => window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
-      chrome.runtime.sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body }).then((res) => reply(isRecord(res) && typeof res.body === "string" ? res.body : null)).catch(() => reply(null));
+      chrome.runtime.sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body }).then((res) => {
+        if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed);
+        reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
+      }).catch(() => reply(null));
     });
+  }
+  var dimReasons = /* @__PURE__ */ new Map();
+  var DIM_CAP = 1500;
+  var dimSite;
+  function markCard(card, reason, direct = false) {
+    if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
+    if (direct) card.dataset.sieveDimDirect = "1";
+    let label = card.querySelector(":scope > .sieve-label");
+    if (!label) {
+      label = document.createElement("span");
+      label.className = "sieve-label";
+      card.prepend(label);
+    }
+    const text = `sieve: ${reason}`;
+    if (label.textContent !== text) label.textContent = text;
+    card.dataset.sieveDimReason = reason;
+  }
+  function unmarkCard(card) {
+    delete card.dataset.sieveDim;
+    delete card.dataset.sieveDimReason;
+    card.querySelector(":scope > .sieve-label")?.remove();
+  }
+  function rememberDim(id, reason) {
+    if (!id) return;
+    if (!dimReasons.has(id) && dimReasons.size >= DIM_CAP) {
+      dimReasons.delete(dimReasons.keys().next().value);
+    }
+    dimReasons.set(id, reason);
+  }
+  function scanDims() {
+    if (!dimSite) return;
+    for (const card of dimSite.cards()) {
+      const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
+      if (reason) markCard(card, reason);
+      else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
+    }
+  }
+  var scheduleDimScan = createRafScheduler(scanDims);
+  function registerDimmed(entries) {
+    for (const e of entries) {
+      rememberDim(e.id, e.reason);
+      if (e.alt) rememberDim(e.alt, e.reason);
+    }
+    scheduleDimScan();
   }
   function bootSiteAdapter(onConfig) {
     installInterceptRelay();
+    const baseOnConfig = onConfig;
+    onConfig = (cfg) => {
+      if (document.documentElement) {
+        document.documentElement.dataset.sieveHide = cfg.display.hideDropped ? "1" : "0";
+      }
+      baseOnConfig(cfg);
+    };
     const cached = readCachedFlags();
     if (document.documentElement) {
       for (const [k, v] of Object.entries(cached)) {
@@ -484,8 +550,12 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         items
       });
       if (!isRecord(res) || !Array.isArray(res.dropped)) return;
+      const reasons = isRecord(res.reasons) ? res.reasons : {};
       for (const id of res.dropped) {
-        if (typeof id === "string") onDrop(id);
+        if (typeof id === "string") {
+          const r = reasons[id];
+          onDrop(id, typeof r === "string" ? r : "dropped");
+        }
       }
     } catch {
     }

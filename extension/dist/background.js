@@ -110,8 +110,9 @@
   // src/core/llm.ts
   var MAX_BATCH_SIZE = 20;
   var BACKGROUND_TIMEOUT_MS = 6e3;
-  function extractJsonObject(raw) {
-    if (!raw) return null;
+  function extractJsonObject(rawInput) {
+    const raw = rawInput.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "");
+    if (!raw.trim()) return null;
     const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
     const candidate = (fenced?.[1] ?? raw).trim();
     const braceStart = candidate.indexOf("{");
@@ -124,29 +125,48 @@
       return null;
     }
   }
-  function parseIndexedVerdicts(raw, orderedIds) {
-    const dropped = /* @__PURE__ */ new Set();
+  function cleanWhy(raw) {
+    if (typeof raw !== "string") return void 0;
+    const t = raw.replace(/\s+/g, " ").trim().slice(0, 40);
+    return t || void 0;
+  }
+  function parseVerdictMap(raw, orderedIds) {
+    const out = /* @__PURE__ */ new Map();
     const parsed = extractJsonObject(raw);
-    if (!parsed) return dropped;
+    if (!parsed) return out;
     const validSet = new Set(orderedIds);
+    const resolve = (ref) => {
+      const key = typeof ref === "number" ? String(ref) : ref;
+      if (typeof key !== "string") return void 0;
+      if (validSet.has(key)) return key;
+      return /^\d+$/.test(key) ? orderedIds[Number.parseInt(key, 10)] : void 0;
+    };
+    const why = isRecord(parsed.why) ? parsed.why : {};
+    const whyFor = (ref, id) => cleanWhy(why[id]) ?? cleanWhy(typeof ref === "string" || typeof ref === "number" ? why[String(ref)] : void 0);
     if (Array.isArray(parsed.drop)) {
-      for (const id of parsed.drop) {
-        if (typeof id === "string" && validSet.has(id)) dropped.add(id);
+      for (const ref of parsed.drop) {
+        const id = resolve(ref);
+        if (id) out.set(id, { verdict: "d", why: whyFor(ref, id) });
       }
-      return dropped;
+      if (Array.isArray(parsed.unsure)) {
+        for (const ref of parsed.unsure) {
+          const id = resolve(ref);
+          if (id && !out.has(id)) out.set(id, { verdict: "u" });
+        }
+      }
+      for (const id of orderedIds) if (!out.has(id)) out.set(id, { verdict: "k" });
+      return out;
     }
     for (const [key, val] of Object.entries(parsed)) {
       if (typeof val !== "string") continue;
       const v = val.trim().toLowerCase();
-      if (v !== "d" && v !== "drop") continue;
-      if (/^\d+$/.test(key)) {
-        const mappedId = orderedIds[Number.parseInt(key, 10)];
-        if (mappedId) dropped.add(mappedId);
-      } else if (validSet.has(key)) {
-        dropped.add(key);
-      }
+      const id = resolve(key);
+      if (!id) continue;
+      if (v === "d" || v === "drop") out.set(id, { verdict: "d", why: whyFor(key, id) });
+      else if (v === "k" || v === "keep") out.set(id, { verdict: "k" });
+      else if (v === "u") out.set(id, { verdict: "u" });
     }
-    return dropped;
+    return out;
   }
   function summarizeIndexedItem(item, index) {
     return {
@@ -163,7 +183,9 @@
 - "u" = unsure or neutral (kept by default when in doubt)
 - "d" = confident drop (ONLY clear ragebait, public humiliation/dunk clips, political/culture-war outrage, celebrity/influencer gossip, crypto/memecoin shills, hustle-bro/DM-funnel bait, short-drama cliffhangers, or AI voiceover sleep-slop)
 
-Return ONLY a JSON object mapping every index to "k", "u", or "d", like {"0":"k","1":"u","2":"d"}.`;
+Return ONLY a JSON object listing the indexes of confident drops, optional unsure indexes, and a 2-4 word label for each drop, like:
+{"drop":["2"],"unsure":["1"],"why":{"2":"outrage bait"}}
+Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`;
   function readFirstChoiceContent(body) {
     if (!isRecord(body) || !Array.isArray(body.choices)) return "";
     const first = body.choices[0];
@@ -171,7 +193,13 @@ Return ONLY a JSON object mapping every index to "k", "u", or "d", like {"0":"k"
     return typeof first.message.content === "string" ? first.message.content : "";
   }
   async function gradeItemsBatch(items, config2, fetchImpl = fetch) {
-    if (config2.grader.mode === "off" || items.length === 0) return /* @__PURE__ */ new Set();
+    const verdicts = await gradeItemsDetailed(items, config2, fetchImpl);
+    const dropped = /* @__PURE__ */ new Set();
+    for (const [id, v] of verdicts) if (v.verdict === "d") dropped.add(id);
+    return dropped;
+  }
+  async function gradeItemsDetailed(items, config2, fetchImpl = fetch) {
+    if (config2.grader.mode === "off" || items.length === 0) return /* @__PURE__ */ new Map();
     if (!config2.grader.endpoint || !config2.grader.model) {
       throw new Error("Missing grader endpoint or model");
     }
@@ -200,6 +228,8 @@ Return ONLY a JSON object mapping every index to "k", "u", or "d", like {"0":"k"
           ...isLocal ? {
             seed: 42,
             keep_alive: "30m",
+            // Ollama: turn off qwen3.x reasoning output. Unknown fields are ignored by servers.
+            think: false,
             response_format: { type: "json_object" }
           } : {},
           messages: [
@@ -220,7 +250,7 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
         throw new Error(`HTTP ${res.status}`);
       }
       const body = await res.json();
-      return parseIndexedVerdicts(readFirstChoiceContent(body), orderedIds);
+      return parseVerdictMap(readFirstChoiceContent(body), orderedIds);
     } finally {
       clearTimeout(timer);
     }
@@ -236,9 +266,15 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
 
 Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
+Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
+
+KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
+- photography
+- filmmaking and cinematography
+- media: journalism, criticism, and production
+- outdoor sports`;
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
-  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
+  var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
     schemaVersion: SCHEMA_VERSION,
     enabled: true,
@@ -269,7 +305,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       hideClutter: true
     },
     tiktok: {
-      enabled: true,
+      enabled: false,
       caliberFilter: true,
       cleanChrome: true,
       lightMode: true,
@@ -283,6 +319,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       rubric: DEFAULT_RUBRIC,
       streamHoldMs: 1500
     },
+    display: { hideDropped: false },
+    recorder: { enabled: false },
     allowHandles: [],
     blockHandles: []
   };
@@ -300,6 +338,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
     const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
+    const disp = isRecord(stored.display) ? stored.display : {};
+    const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
     const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
     return {
@@ -346,6 +386,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
+      display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
+      recorder: { enabled: bool(rec, "enabled", d.recorder.enabled) },
       allowHandles: readStringList(stored.allowHandles),
       blockHandles: readStringList(stored.blockHandles)
     };
@@ -763,75 +805,85 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     if (byHandle && byHandle !== byId) keys.push(byHandle);
     return keys;
   }
-  function evaluateLocalTiers(item, config2, seeds2, memory2, novelty2) {
-    if (item.isSponsored) return "drop";
+  var KEEP = (reason) => ({ verdict: "keep", reason });
+  var DROP = (reason) => ({ verdict: "drop", reason });
+  function evaluateLocalDecision(item, config2, seeds2, memory2, novelty2) {
+    if (item.isSponsored) return DROP("sponsored");
     const keys = creatorKeysFor(item);
     if (config2.blockHandles.length > 0) {
       const blocked = new Set(config2.blockHandles.map((h) => normalizeHandle(h)).filter(Boolean));
-      if (keys.some((k) => blocked.has(k))) return "drop";
+      if (keys.some((k) => blocked.has(k))) return DROP("blocked handle");
     }
     if (config2.allowHandles.length > 0) {
       const allowed = new Set(config2.allowHandles.map((h) => normalizeHandle(h)).filter(Boolean));
-      if (keys.some((k) => allowed.has(k))) return "keep";
+      if (keys.some((k) => allowed.has(k))) return KEEP("allowed handle");
     }
-    if (config2.passFollowed && item.isFollowed) return "keep";
-    if (item.platform === "youtube" && seeds2.hnVideos.has(item.id)) return "keep";
-    if (keys.some((k) => seeds2.hnChannels.has(k))) return "keep";
+    if (config2.passFollowed && item.isFollowed) return KEEP("followed");
+    if (item.platform === "youtube" && seeds2.hnVideos.has(item.id)) return KEEP("hn video");
+    if (keys.some((k) => seeds2.hnChannels.has(k))) return KEEP("hn channel");
     const ytIds = item.linkedYoutubeIds ?? extractYouTubeIdsFromText(item.titleOrText);
-    if (ytIds.some((vid) => seeds2.hnVideos.has(vid))) return "keep";
-    if (keys.some((k) => seeds2.slopChannels.has(k))) return "drop";
+    if (ytIds.some((vid) => seeds2.hnVideos.has(vid))) return KEEP("hn video link");
+    if (keys.some((k) => seeds2.slopChannels.has(k))) return DROP("slop list");
     const fullText = `${item.titleOrText} ${item.secondaryText ?? ""}`;
-    if (COMMENT_BAIT_RE.test(fullText) || CRYPTO_CASINO_SPAM_RE.test(fullText) || SHORT_DRAMA_RE.test(fullText) || ATTENTION_TRAP_RE.test(fullText) || GOSSIP_DOMAIN_RE.test(fullText)) {
-      return "drop";
-    }
+    if (COMMENT_BAIT_RE.test(fullText)) return DROP("comment bait");
+    if (CRYPTO_CASINO_SPAM_RE.test(fullText)) return DROP("crypto spam");
+    if (SHORT_DRAMA_RE.test(fullText)) return DROP("short drama");
+    if (ATTENTION_TRAP_RE.test(fullText)) return DROP("hype headline");
+    if (GOSSIP_DOMAIN_RE.test(fullText)) return DROP("gossip");
     if (!item.isFollowed) {
       if (item.platform === "x" && config2.x.slopCadenceFilter) {
-        if (isStructuralSlop(item.titleOrText, {}, 65)) return "drop";
+        if (isStructuralSlop(item.titleOrText, {}, 65)) return DROP("slop cadence");
       } else if (item.platform !== "youtube") {
-        if (isStructuralSlop(item.titleOrText, {}, 74)) return "drop";
+        if (isStructuralSlop(item.titleOrText, {}, 74)) return DROP("slop cadence");
       }
       if (config2.noveltyFilter && novelty2?.isRedundantRehash(item.titleOrText)) {
-        return "drop";
+        return DROP("novelty");
       }
     }
     const cachedVerdict = memory2.getItemVerdict(item.platform, item.id);
-    if (cachedVerdict) return cachedVerdict;
+    if (cachedVerdict) return { verdict: cachedVerdict, reason: "cached verdict" };
     for (const key of keys) {
       const learned = memory2.getCreatorVerdict(item.platform, key);
-      if (learned) return learned;
+      if (learned) {
+        return { verdict: learned, reason: learned === "drop" ? "known-bad creator" : "known-good creator" };
+      }
     }
     if (item.platform === "x" && !item.isFollowed && item.metrics) {
       const likes = item.metrics.likes ?? 0;
       const replies = item.metrics.replies ?? 0;
       const quotes = item.metrics.quotes ?? 0;
       if (replies >= 40 && (replies > likes * 1.4 || quotes > likes * 1.1)) {
-        return "drop";
+        return DROP("ragebait ratio");
       }
     }
-    return "uncertain";
+    return { verdict: "uncertain", reason: "uncertain" };
   }
-  async function runSieveOnBatch(items, config2, seeds2, memory2, fetchImpl = fetch, novelty2) {
-    const droppedIds = /* @__PURE__ */ new Set();
+  async function runSieveDetailed(items, config2, seeds2, memory2, fetchImpl = fetch, novelty2, hooks = {}) {
+    const dropped = /* @__PURE__ */ new Map();
     const uncertain = [];
     for (const item of items) {
-      const localVerdict = evaluateLocalTiers(item, config2, seeds2, memory2, novelty2);
-      if (localVerdict === "drop") {
-        droppedIds.add(item.id);
-      } else if (localVerdict === "uncertain") {
+      const decision = evaluateLocalDecision(item, config2, seeds2, memory2, novelty2);
+      if (decision.verdict === "drop") {
+        dropped.set(item.id, decision.reason);
+      } else if (decision.verdict === "uncertain") {
         uncertain.push(item);
       }
     }
     if (uncertain.length === 0 || config2.grader.mode === "off") {
-      return droppedIds;
+      return dropped;
     }
     const holdMs = Math.max(50, config2.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
-    const gradingPromise = gradeItemsBatch(uncertain, config2, fetchImpl).then(async (llmDrops) => {
+    const gradingPromise = gradeItemsDetailed(uncertain, config2, fetchImpl).then(async (verdicts) => {
       for (const item of uncertain) {
-        const verdict = llmDrops.has(item.id) ? "drop" : "keep";
-        await memory2.recordVerdict(item, verdict);
+        const v = verdicts.get(item.id)?.verdict;
+        if (v === "k") await memory2.recordVerdict(item, "keep");
+        else if (v === "d") await memory2.recordVerdict(item, "drop");
       }
-      return llmDrops;
-    }).catch(() => /* @__PURE__ */ new Set());
+      return verdicts;
+    }).catch((err) => {
+      hooks.onGraderError?.(err);
+      return /* @__PURE__ */ new Map();
+    });
     let timer;
     const timedOut = Symbol("timeout");
     const outcome = await Promise.race([
@@ -842,9 +894,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     ]);
     if (timer) clearTimeout(timer);
     if (outcome !== timedOut) {
-      for (const id of outcome) droppedIds.add(id);
+      for (const [id, v] of outcome) {
+        if (v.verdict === "d") dropped.set(id, v.why ? `grader: ${v.why}` : "grader");
+      }
     }
-    return droppedIds;
+    return dropped;
   }
 
   // src/background/memory.ts
@@ -884,31 +938,37 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const creators = /* @__PURE__ */ new Map();
     let droppedTotal = 0;
     const dbPromise = openDb();
-    void dbPromise.then((db) => {
+    const ready2 = dbPromise.then((db) => {
       if (!db) return;
       const now = Date.now();
-      try {
-        const tx = db.transaction(["items", "creators"], "readonly");
-        const itemReq = tx.objectStore("items").getAll();
-        itemReq.onsuccess = () => {
-          if (!Array.isArray(itemReq.result)) return;
-          for (const row of itemReq.result) {
-            if (isStoredVerdict(row) && now - row.at <= ITEM_TTL_MS && items.size < maxItems) {
-              items.set(row.key, row);
+      return new Promise((done2) => {
+        try {
+          const tx = db.transaction(["items", "creators"], "readonly");
+          const itemReq = tx.objectStore("items").getAll();
+          itemReq.onsuccess = () => {
+            if (!Array.isArray(itemReq.result)) return;
+            for (const row of itemReq.result) {
+              if (isStoredVerdict(row) && now - row.at <= ITEM_TTL_MS && items.size < maxItems) {
+                items.set(row.key, row);
+              }
             }
-          }
-        };
-        const creatorReq = tx.objectStore("creators").getAll();
-        creatorReq.onsuccess = () => {
-          if (!Array.isArray(creatorReq.result)) return;
-          for (const row of creatorReq.result) {
-            if (isCreatorRecord(row) && now - row.updatedAt <= CREATOR_TTL_MS) {
-              creators.set(row.key, row);
+          };
+          const creatorReq = tx.objectStore("creators").getAll();
+          creatorReq.onsuccess = () => {
+            if (!Array.isArray(creatorReq.result)) return;
+            for (const row of creatorReq.result) {
+              if (isCreatorRecord(row) && now - row.updatedAt <= CREATOR_TTL_MS) {
+                creators.set(row.key, row);
+              }
             }
-          }
-        };
-      } catch {
-      }
+          };
+          tx.oncomplete = () => done2();
+          tx.onerror = () => done2();
+          tx.onabort = () => done2();
+        } catch {
+          done2();
+        }
+      });
     });
     function itemMapKey(platform, id) {
       return `${platform}:${id}`;
@@ -927,10 +987,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       if (total >= 5 && rec.keeps / total <= 0.15) return "drop";
       return void 0;
     }
-    function isShareableHandle(rawKey) {
-      return rawKey.length >= 3 && !/^\d+$/.test(rawKey) && !/^uc[a-z0-9_-]{20,}$/i.test(rawKey);
-    }
     return {
+      ready: ready2,
       getItemVerdict(platform, id) {
         const key = itemMapKey(platform, id);
         const hit = items.get(key);
@@ -945,14 +1003,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       },
       getCreatorVerdict(platform, rawKey) {
         const normalized = rawKey.toLowerCase();
-        const platformVerdict = evaluateCreatorRecord(
-          creators.get(creatorMapKey(platform, normalized))
-        );
-        if (platformVerdict) return platformVerdict;
-        if (isShareableHandle(normalized)) {
-          return evaluateCreatorRecord(creators.get(`*:${normalized}`));
-        }
-        return void 0;
+        return evaluateCreatorRecord(creators.get(creatorMapKey(platform, normalized)));
       },
       async recordVerdict(item, verdict) {
         if (verdict === "drop") droppedTotal += 1;
@@ -970,7 +1021,6 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const bucketKeys = /* @__PURE__ */ new Set();
         for (const cKey of creatorKeysFor(item)) {
           bucketKeys.add(creatorMapKey(item.platform, cKey));
-          if (isShareableHandle(cKey)) bucketKeys.add(`*:${cKey}`);
         }
         for (const fullKey of bucketKeys) {
           const existing = creators.get(fullKey) ?? {
@@ -1202,19 +1252,26 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
   function createNoveltyMemory() {
     const entries = [];
     const dbPromise = openNoveltyDb();
-    void dbPromise.then((db) => {
+    const ready2 = dbPromise.then((db) => {
       if (!db) return;
       const now = Date.now();
-      try {
-        const req = db.transaction("dwelled", "readonly").objectStore("dwelled").getAll();
-        req.onsuccess = () => {
-          if (!Array.isArray(req.result)) return;
-          req.result.filter((r) => isDwelledEntry(r) && now - r.at <= NOVELTY_TTL_MS).slice(-MAX_NOVELTY_RECORDS).forEach((r) => {
-            entries.push({ id: r.id, tokenSet: new Set(r.tokens), at: r.at });
-          });
-        };
-      } catch {
-      }
+      return new Promise((done2) => {
+        try {
+          const tx = db.transaction("dwelled", "readonly");
+          tx.oncomplete = () => done2();
+          tx.onerror = () => done2();
+          tx.onabort = () => done2();
+          const req = tx.objectStore("dwelled").getAll();
+          req.onsuccess = () => {
+            if (!Array.isArray(req.result)) return;
+            req.result.filter((r) => isDwelledEntry(r) && now - r.at <= NOVELTY_TTL_MS).slice(-MAX_NOVELTY_RECORDS).forEach((r) => {
+              entries.push({ id: r.id, tokenSet: new Set(r.tokens), at: r.at });
+            });
+          };
+        } catch {
+          done2();
+        }
+      });
     });
     function pruneExpired(now) {
       while (entries.length > 0 && now - entries[0].at > NOVELTY_TTL_MS) {
@@ -1236,6 +1293,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       };
     }
     return {
+      ready: ready2,
       recordDwelled(text) {
         const tokenSet = extractSignatureTokens(text);
         if (tokenSet.size < MIN_SIGNATURE_TOKENS) return;
@@ -1294,6 +1352,64 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     };
   }
 
+  // src/background/fixtures.ts
+  var DB_NAME2 = "sieve_fixtures_v1";
+  var STORE = "samples";
+  var FIXTURE_CAP = 40;
+  function openDb2() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME2, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { autoIncrement: true });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function done(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+  async function addFixture(site, rawUrl, body) {
+    const u = new URL(rawUrl);
+    const db = await openDb2();
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    store.add({ site, url: u.origin + u.pathname, time: Date.now(), body });
+    const keysReq = store.getAllKeys();
+    keysReq.onsuccess = () => {
+      const extra = keysReq.result.length - FIXTURE_CAP;
+      for (let i = 0; i < extra; i++) store.delete(keysReq.result[i]);
+    };
+    await done(tx);
+    db.close();
+  }
+
+  // src/core/sink.ts
+  function createSink(remove) {
+    return { remove, reasons: /* @__PURE__ */ new Map(), dimmed: [], hard: [] };
+  }
+  function snippet(text, max = 120) {
+    return text.replace(/\s+/g, " ").trim().slice(0, max);
+  }
+  function hardRemoval(sink, site, reason, text = "") {
+    sink?.hard.push({ site, reason, text: snippet(text) });
+  }
+  function gradedDrop(sink, item, id) {
+    if (!sink) return true;
+    if (!sink.dimmed.some((e) => e.id === id)) {
+      sink.dimmed.push({
+        id,
+        alt: item?.altId,
+        site: item?.platform ?? "youtube",
+        reason: sink.reasons.get(id) ?? "dropped",
+        text: snippet(item?.titleOrText ?? "")
+      });
+    }
+    return sink.remove;
+  }
+
   // src/adapters/instagram-json.ts
   function isMediaAd(media, wrapper) {
     if (media.ad_id || media.is_ad === true || media.is_organic_product_tagging_eligible === false && media.ad_action) {
@@ -1341,6 +1457,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       creatorHandle,
       isFollowed,
       surface,
+      altId: typeof media.code === "string" ? media.code : void 0,
       titleOrText: captionText || `@${creatorHandle ?? "reel"}`,
       secondaryText,
       durationSec,
@@ -1357,7 +1474,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       return false;
     }
   }
-  async function filterInstagramJson(data, urlPath, config2, decide, pageUrl) {
+  async function filterInstagramJson(data, urlPath, config2, decide, pageUrl, sink) {
     if (!config2.enabled || !config2.instagram.enabled) return data;
     if (!isRecord(data)) return data;
     const onProfileOrPost = isInstagramProfileOrPermalink(pageUrl);
@@ -1383,6 +1500,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const media = getMediaFromEdge(edge);
         if (!media) continue;
         if (isMediaAd(media, node)) {
+          hardRemoval(sink, "instagram", "ad");
           edges.splice(i, 1);
           i--;
           continue;
@@ -1414,6 +1532,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const media = isRecord(entry) && isRecord(entry.media) ? entry.media : isRecord(entry) ? entry : null;
         if (!media) continue;
         if (isMediaAd(media, isRecord(entry) ? entry : void 0)) {
+          hardRemoval(sink, "instagram", "ad");
           items.splice(i, 1);
           continue;
         }
@@ -1438,12 +1557,14 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const entry = feedItems[i];
         if (!isRecord(entry)) continue;
         if (config2.instagram.hideClutter && (entry.suggested_users || entry.explore_story || entry.clips_netego)) {
+          hardRemoval(sink, "instagram", "suggested");
           feedItems.splice(i, 1);
           continue;
         }
         const media = isRecord(entry.media_or_ad) ? entry.media_or_ad : null;
         if (!media) continue;
         if (isMediaAd(media, entry)) {
+          hardRemoval(sink, "instagram", "ad");
           feedItems.splice(i, 1);
           continue;
         }
@@ -1471,7 +1592,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       processedLists.add(slot.list);
       for (let i = slot.list.length - 1; i >= 0; i--) {
         const id = slot.getMediaId(slot.list[i]);
-        if (id && droppedIds.has(id)) {
+        if (id && droppedIds.has(id) && gradedDrop(sink, candidates.get(id), id)) {
           slot.list.splice(i, 1);
         }
       }
@@ -1516,7 +1637,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       const id = typeof raw.id === "string" ? raw.id : "";
       if (!id) continue;
       const author = isRecord(raw.author) ? raw.author : {};
-      const stats = isRecord(raw.stats) ? raw.stats : {};
+      const stats2 = isRecord(raw.stats) ? raw.stats : {};
       const video = isRecord(raw.video) ? raw.video : {};
       const followStatus = typeof author.followStatus === "number" ? author.followStatus : 0;
       candidates.set(id, {
@@ -1529,8 +1650,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         titleOrText: desc || `@${typeof author.uniqueId === "string" ? author.uniqueId : "tiktok"}`,
         durationSec: typeof video.duration === "number" ? video.duration : void 0,
         metrics: {
-          likes: typeof stats.diggCount === "number" ? stats.diggCount : void 0,
-          replies: typeof stats.commentCount === "number" ? stats.commentCount : void 0
+          likes: typeof stats2.diggCount === "number" ? stats2.diggCount : void 0,
+          replies: typeof stats2.commentCount === "number" ? stats2.commentCount : void 0
         }
       });
     }
@@ -1742,7 +1863,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       metrics: { likes, replies, quotes }
     };
   }
-  async function filterTwitterJson(data, urlPath, config2, decide) {
+  async function filterTwitterJson(data, urlPath, config2, decide, sink) {
     if (!config2.enabled || !config2.x.enabled) return data;
     if (!isRecord(data)) return data;
     const isProfilePayload = isRecord(data.data) && isRecord(data.data.user);
@@ -1785,6 +1906,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         if (!isRecord(entry)) continue;
         const entryId = typeof entry.entryId === "string" ? entry.entryId : "";
         if (entryId && isNoiseEntryId(entryId)) {
+          hardRemoval(sink, "x", /promoted/i.test(entryId) ? "promoted" : "suggested");
           entries.splice(i, 1);
           i--;
           continue;
@@ -1792,6 +1914,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const content = isRecord(entry.content) ? entry.content : isRecord(entry.item) ? entry.item : void 0;
         const itemContent = content && isRecord(content.itemContent) ? content.itemContent : void 0;
         if (itemContent?.promotedMetadata) {
+          hardRemoval(sink, "x", "promoted");
           entries.splice(i, 1);
           i--;
           continue;
@@ -1816,6 +1939,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
           const domainCtx = typeof trendMeta.domainContext === "string" ? trendMeta.domainContext : void 0;
           const metaDesc = typeof trendMeta.metaDescription === "string" ? trendMeta.metaDescription : "";
           if (/promoted/i.test(metaDesc)) {
+            hardRemoval(sink, "x", "promoted", trendName);
             entries.splice(i, 1);
             i--;
             continue;
@@ -1843,7 +1967,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     if (droppedIds.size === 0) return data;
     const listsToPrune = /* @__PURE__ */ new Map();
     for (const ref of entryRefs) {
-      if (ref.itemId && droppedIds.has(ref.itemId)) {
+      if (ref.itemId && droppedIds.has(ref.itemId) && gradedDrop(sink, candidates.get(ref.itemId), ref.itemId)) {
         let set = listsToPrune.get(ref.list);
         if (!set) {
           set = /* @__PURE__ */ new Set();
@@ -2102,7 +2226,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       }
     }
   }
-  async function filterYouTubeJson(data, urlPath, pageUrl, config2, decide) {
+  async function filterYouTubeJson(data, urlPath, pageUrl, config2, decide, sink) {
     if (!config2.enabled || !config2.youtube.enabled) return data;
     if (!isRecord(data) && !Array.isArray(data)) return data;
     const surface = surfaceFromEndpoint(urlPath);
@@ -2123,24 +2247,29 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       if (!isRecord(node)) return false;
       for (const key of Object.keys(node)) {
         if (AD_AND_NOISE_KEYS.has(key)) {
+          hardRemoval(sink, "youtube", "ad");
           delete node[key];
           return Object.keys(node).length === 0;
         }
         if (config2.youtube.hideShorts && SHORTS_KEYS.has(key)) {
+          hardRemoval(sink, "youtube", "shorts");
           delete node[key];
           return Object.keys(node).length === 0;
         }
         if (config2.youtube.hideShorts && key === "gridShelfViewModel" && containsShortsUrl(node[key])) {
+          hardRemoval(sink, "youtube", "shorts");
           delete node[key];
           return Object.keys(node).length === 0;
         }
       }
       if (isRecord(node.lockupViewModel)) {
         if (isMixLockup(node.lockupViewModel)) {
+          hardRemoval(sink, "youtube", "mix");
           delete node.lockupViewModel;
           return Object.keys(node).length === 0;
         }
         if (config2.youtube.hideShorts && containsShortsUrl(node.lockupViewModel)) {
+          hardRemoval(sink, "youtube", "shorts");
           delete node.lockupViewModel;
           return Object.keys(node).length === 0;
         }
@@ -2153,6 +2282,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const renderer = node[key];
         if (!isRecord(renderer)) continue;
         if (config2.youtube.hideShorts && containsShortsUrl(renderer.navigationEndpoint)) {
+          hardRemoval(sink, "youtube", "shorts");
           delete node[key];
           return Object.keys(node).length === 0;
         }
@@ -2189,7 +2319,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       if (!isRecord(node)) return false;
       if (isRecord(node.lockupViewModel)) {
         const id = typeof node.lockupViewModel.contentId === "string" ? node.lockupViewModel.contentId : "";
-        if (id && droppedIds.has(id)) {
+        if (id && droppedIds.has(id) && gradedDrop(sink, candidates.get(id), id)) {
           delete node.lockupViewModel;
           return Object.keys(node).length === 0;
         }
@@ -2199,7 +2329,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         const renderer = node[key];
         if (!isRecord(renderer)) continue;
         const id = typeof renderer.videoId === "string" ? renderer.videoId : "";
-        if (id && droppedIds.has(id)) {
+        if (id && droppedIds.has(id) && gradedDrop(sink, candidates.get(id), id)) {
           delete node[key];
           return Object.keys(node).length === 0;
         }
@@ -2223,44 +2353,151 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
 
   // src/background/rewrite.ts
   var TWITTER_TIMELINE_RE = /\/i\/api\/graphql\/[^/]+\/(HomeTimeline|HomeLatestTimeline|ExplorePage|GenericTimelineById|ExploreSidebar|SearchTimeline)/;
+  function siteForHost(host) {
+    if (host.endsWith("youtube.com")) return "youtube";
+    if (host === "x.com" || host === "twitter.com") return "x";
+    if (host.endsWith("instagram.com")) return "instagram";
+    if (host.endsWith("tiktok.com")) return "tiktok";
+    return null;
+  }
   function shouldFilterUrl(url, config2) {
     if (!config2.enabled) return false;
-    const host = url.hostname;
     const path = url.pathname;
-    if (host.endsWith("youtube.com")) {
-      return config2.youtube.enabled && path.startsWith("/youtubei/v1/");
+    switch (siteForHost(url.hostname)) {
+      case "youtube":
+        return config2.youtube.enabled && path.startsWith("/youtubei/v1/");
+      case "x":
+        return config2.x.enabled && TWITTER_TIMELINE_RE.test(path);
+      case "instagram":
+        return config2.instagram.enabled && (path === "/graphql/query" || path.startsWith("/api/v1/clips/home") || path.startsWith("/api/v1/feed/timeline"));
+      case "tiktok":
+        return config2.tiktok.enabled && (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"));
+      default:
+        return false;
     }
-    if (host === "x.com" || host === "twitter.com") {
-      return config2.x.enabled && TWITTER_TIMELINE_RE.test(path);
-    }
-    if (host.endsWith("instagram.com")) {
-      return config2.instagram.enabled && (path === "/graphql/query" || path.startsWith("/api/v1/clips/home") || path.startsWith("/api/v1/feed/timeline"));
-    }
-    if (host.endsWith("tiktok.com")) {
-      return config2.tiktok.enabled && (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"));
-    }
-    return false;
   }
-  async function rewriteResponseBody(rawUrl, pageUrl, text, config2, decideBatch2) {
+  async function rewriteResponseBody(rawUrl, pageUrl, text, config2, deps) {
     try {
       const url = new URL(rawUrl);
+      const site = siteForHost(url.hostname);
+      if (config2.recorder.enabled && site && deps.recordFixture) {
+        await deps.recordFixture(site, rawUrl, text).catch(() => void 0);
+      }
       if (!shouldFilterUrl(url, config2)) return null;
       const json = JSON.parse(text);
-      const host = url.hostname;
+      const sink = createSink(config2.display.hideDropped);
+      const decide = async (items) => {
+        const dropped = await deps.evaluate(items);
+        for (const [id, reason] of dropped) sink.reasons.set(id, reason);
+        return new Set(dropped.keys());
+      };
       const path = url.pathname;
       let out = json;
-      if (host.endsWith("youtube.com")) {
-        out = await filterYouTubeJson(json, path, pageUrl, config2, decideBatch2);
-      } else if (host === "x.com" || host === "twitter.com") {
-        out = await filterTwitterJson(json, path, config2, decideBatch2);
-      } else if (host.endsWith("instagram.com")) {
-        out = await filterInstagramJson(json, path, config2, decideBatch2, pageUrl);
-      } else if (host.endsWith("tiktok.com")) {
-        out = await filterTikTokJson(json, config2, decideBatch2, path, pageUrl);
+      if (site === "youtube") {
+        out = await filterYouTubeJson(json, path, pageUrl, config2, decide, sink);
+      } else if (site === "x") {
+        out = await filterTwitterJson(json, path, config2, decide, sink);
+      } else if (site === "instagram") {
+        out = await filterInstagramJson(json, path, config2, decide, pageUrl, sink);
+      } else if (site === "tiktok") {
+        out = await filterTikTokJson(json, config2, decide, path, pageUrl);
       }
-      return JSON.stringify(out);
+      return { body: JSON.stringify(out), dimmed: sink.dimmed, hard: sink.hard };
     } catch {
       return null;
+    }
+  }
+
+  // src/background/stats.ts
+  var STATS_KEY = "sieveStats";
+  var LOG_KEY = "sieveLog";
+  var DIAG_KEY = "sieveDiag";
+  var LOG_CAP = 2e3;
+  var MAX_DAYS = 400;
+  var MAX_DOC_SESSIONS = 50;
+  var emptyCounts = () => ({ seen: 0, dimmed: 0, removed: 0, reasons: {} });
+  function dayKey(ms) {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  function createStats(kv, now = Date.now) {
+    let chain = Promise.resolve();
+    const serial = (fn) => {
+      const next = chain.then(fn, fn);
+      chain = next.catch(() => void 0);
+      return next;
+    };
+    const seenByDoc = /* @__PURE__ */ new Map();
+    async function readStats() {
+      const raw = (await kv.get(STATS_KEY))[STATS_KEY];
+      return isRecord(raw) ? raw : {};
+    }
+    async function readLog() {
+      const raw = (await kv.get(LOG_KEY))[LOG_KEY];
+      return Array.isArray(raw) ? raw : [];
+    }
+    return {
+      /** Counts items once per page session and records graded drops (id -> reason). */
+      record(docKey, items, dropped) {
+        return serial(async () => {
+          let seen = seenByDoc.get(docKey);
+          if (!seen) {
+            if (seenByDoc.size >= MAX_DOC_SESSIONS) seenByDoc.delete(seenByDoc.keys().next().value);
+            seen = /* @__PURE__ */ new Set();
+            seenByDoc.set(docKey, seen);
+          }
+          const t = now();
+          const stats2 = await readStats();
+          const day = stats2[dayKey(t)] ??= {};
+          const logAdds = [];
+          for (const item of items) {
+            const key = `${item.platform}:${item.id}`;
+            const c = day[item.platform] ??= emptyCounts();
+            if (!seen.has(key)) {
+              seen.add(key);
+              c.seen += 1;
+            }
+            const reason = dropped.get(item.id);
+            if (reason !== void 0) {
+              c.dimmed += 1;
+              c.reasons[reason] = (c.reasons[reason] ?? 0) + 1;
+              logAdds.push({ site: item.platform, text: snippet(item.titleOrText), reason, time: t });
+            }
+          }
+          await write(stats2, logAdds);
+        });
+      },
+      recordRemoved(removals) {
+        if (removals.length === 0) return Promise.resolve();
+        return serial(async () => {
+          const t = now();
+          const stats2 = await readStats();
+          const day = stats2[dayKey(t)] ??= {};
+          for (const r of removals) {
+            const c = day[r.site] ??= emptyCounts();
+            c.removed += 1;
+            c.reasons[r.reason] = (c.reasons[r.reason] ?? 0) + 1;
+          }
+          await write(
+            stats2,
+            removals.map((r) => ({ site: r.site, text: r.text, reason: r.reason, time: t }))
+          );
+        });
+      },
+      bumpDiag() {
+        return serial(async () => {
+          const raw = (await kv.get(DIAG_KEY))[DIAG_KEY];
+          const n = isRecord(raw) && typeof raw.graderUnreachable === "number" ? raw.graderUnreachable : 0;
+          await kv.set({ [DIAG_KEY]: { graderUnreachable: n + 1 } });
+        });
+      }
+    };
+    async function write(stats2, logAdds) {
+      for (const day of Object.keys(stats2).sort().slice(0, -MAX_DAYS)) delete stats2[day];
+      const update = { [STATS_KEY]: stats2 };
+      if (logAdds.length > 0) update[LOG_KEY] = [...await readLog(), ...logAdds].slice(-LOG_CAP);
+      await kv.set(update);
     }
   }
 
@@ -2306,6 +2543,10 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     hnChannels: /* @__PURE__ */ new Set(),
     slopChannels: /* @__PURE__ */ new Set()
   };
+  var stats = createStats({
+    get: (key) => chrome.storage.local.get(key),
+    set: (items) => chrome.storage.local.set(items)
+  });
   var memory = createMemoryStore();
   var novelty = createNoveltyMemory();
   async function loadSeedSet(assetPath, target) {
@@ -2335,7 +2576,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
   }
   var ready;
   function ensureReady() {
-    ready ??= initConfigAndSeeds();
+    ready ??= Promise.all([initConfigAndSeeds(), memory.ready, novelty.ready]).then(() => void 0);
     return ready;
   }
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -2343,11 +2584,17 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       config = mergeConfig(changes.sieveConfig.newValue);
     }
   });
-  var decideBatch = async (items) => {
-    const dropped = await runSieveOnBatch(items, config, seeds, memory, fetch, novelty);
+  async function evaluate(items, docKey) {
+    const dropped = await runSieveDetailed(items, config, seeds, memory, fetch, novelty, {
+      onGraderError: () => void stats.bumpDiag().catch(() => void 0)
+    });
+    await stats.record(docKey, items, dropped).catch(() => void 0);
     if (dropped.size > 0) await setSessionCount(await getSessionCount() + dropped.size);
     return dropped;
-  };
+  }
+  function docKeyOf(sender) {
+    return sender.documentId ?? `${sender.tab?.id ?? "x"}:${sender.frameId ?? 0}`;
+  }
   function parseGraderOverride(raw) {
     if (!isRecord(raw)) return void 0;
     const mode = raw.mode === "off" || raw.mode === "local" || raw.mode === "api" ? raw.mode : null;
@@ -2369,17 +2616,23 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       if (!sender.tab || typeof raw.url !== "string" || typeof raw.pageUrl !== "string" || typeof raw.body !== "string" || raw.body.length > MAX_STREAM_BYTES || !matchesInterceptUrl(raw.url)) {
         return Promise.resolve({ body: null });
       }
-      return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, decideBatch).then(
-        (body) => ({ body })
-      );
+      const docKey = docKeyOf(sender);
+      return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, {
+        evaluate: (items) => evaluate(items, docKey),
+        recordFixture: addFixture
+      }).then(async (res) => {
+        if (!res) return { body: null };
+        await stats.recordRemoved(res.hard).catch(() => void 0);
+        return { body: res.body, dimmed: res.dimmed };
+      });
     }
     if (raw.type === "GET_STATUS") {
-      const stats = memory.counts();
+      const stats2 = memory.counts();
       return getSessionCount().then(
         (sessionFilteredCount) => ({
           sessionFilteredCount,
-          cachedItems: stats.cachedItems,
-          learnedCreators: stats.learnedCreators,
+          cachedItems: stats2.cachedItems,
+          learnedCreators: stats2.learnedCreators,
           dwelledCount: novelty.size(),
           hnVideos: seeds.hnVideos.size,
           slopChannels: seeds.slopChannels.size
@@ -2390,6 +2643,9 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       novelty.clear();
       clearDeArrowCache();
       return Promise.all([setSessionCount(0), memory.clear()]).then(() => ({ ok: true }));
+    }
+    if (raw.type === "CLEAR_VERDICT_CACHE") {
+      return memory.clear().then(() => ({ ok: true }));
     }
     if (raw.type === "RECORD_DWELL" && typeof raw.text === "string") {
       if (config.enabled && config.noveltyFilter) {
@@ -2412,8 +2668,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       const items = raw.items.filter(
         (item) => isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string"
       );
-      return decideBatch(items).then(
-        (dropped) => ({ dropped: [...dropped] })
+      return evaluate(items, docKeyOf(sender)).then(
+        (dropped) => ({
+          dropped: [...dropped.keys()],
+          reasons: Object.fromEntries(dropped)
+        })
       );
     }
     if (raw.type === "TEST_GRADER") {
