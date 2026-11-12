@@ -70,9 +70,10 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
   let droppedTotal = 0;
 
   const dbPromise = openDb();
-  void dbPromise.then((db) => {
+  const ready: Promise<void> = dbPromise.then((db) => {
     if (!db) return;
     const now = Date.now();
+    return new Promise<void>((done) => {
     try {
       const tx = db.transaction(["items", "creators"], "readonly");
       const itemReq = tx.objectStore("items").getAll();
@@ -93,9 +94,14 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
           }
         }
       };
+      tx.oncomplete = () => done();
+      tx.onerror = () => done();
+      tx.onabort = () => done();
     } catch {
       // Restricted or private contexts fall back to in-memory Maps.
+      done();
     }
+    });
   });
 
   function itemMapKey(platform: Platform, id: string): string {
@@ -118,15 +124,8 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
     return undefined;
   }
 
-  function isShareableHandle(rawKey: string): boolean {
-    return (
-      rawKey.length >= 3 &&
-      !/^\d+$/.test(rawKey) &&
-      !/^uc[a-z0-9_-]{20,}$/i.test(rawKey)
-    );
-  }
-
   return {
+    ready,
     getItemVerdict(platform, id) {
       const key = itemMapKey(platform, id);
       const hit = items.get(key);
@@ -142,14 +141,8 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
 
     getCreatorVerdict(platform, rawKey) {
       const normalized = rawKey.toLowerCase();
-      const platformVerdict = evaluateCreatorRecord(
-        creators.get(creatorMapKey(platform, normalized)),
-      );
-      if (platformVerdict) return platformVerdict;
-      if (isShareableHandle(normalized)) {
-        return evaluateCreatorRecord(creators.get(`*:${normalized}`));
-      }
-      return undefined;
+      // Per-site keys only: a verdict learned on YouTube never applies to X or Instagram.
+      return evaluateCreatorRecord(creators.get(creatorMapKey(platform, normalized)));
     },
 
     async recordVerdict(item: FeedItem, verdict: ResolvedVerdict) {
@@ -171,7 +164,6 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       const bucketKeys = new Set<string>();
       for (const cKey of creatorKeysFor(item)) {
         bucketKeys.add(creatorMapKey(item.platform, cKey));
-        if (isShareableHandle(cKey)) bucketKeys.add(`*:${cKey}`);
       }
 
       for (const fullKey of bucketKeys) {

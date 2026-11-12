@@ -5,6 +5,8 @@ import {
   rewriteTikTokThemeCookieHeader,
 } from "../src/adapters/tiktok-json.js";
 
+const TT_ON = { ...DEFAULT_CONFIG, tiktok: { ...DEFAULT_CONFIG.tiktok, enabled: true } };
+
 describe("rewriteTikTokThemeCookieHeader", () => {
   it("forces tiktok_webapp_theme=light and tiktok_webapp_theme_source=custom cleanly", () => {
     expect(DEFAULT_CONFIG.tiktok.lightMode).toBe(true);
@@ -50,7 +52,7 @@ describe("filterTikTokJson", () => {
 
     const out = (await filterTikTokJson(
       payload,
-      DEFAULT_CONFIG,
+      TT_ON,
       async () => new Set(["tt_slop_3"]),
     )) as typeof payload;
 
@@ -73,7 +75,7 @@ describe("filterTikTokJson", () => {
     let deciderCalled = false;
     const out = (await filterTikTokJson(
       profilePayload,
-      DEFAULT_CONFIG,
+      TT_ON,
       async () => {
         deciderCalled = true;
         return new Set(["tt_prof_1"]);
