@@ -856,7 +856,10 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       }
     }
     const cachedVerdict = memory2.getItemVerdict(item.platform, item.id);
-    if (cachedVerdict) return { verdict: cachedVerdict, reason: "cached verdict" };
+    if (cachedVerdict) {
+      const original = memory2.getItemReason?.(item.platform, item.id);
+      return { verdict: cachedVerdict, reason: original ? `${original} (cached)` : "cached verdict" };
+    }
     for (const key of keys) {
       const learned = memory2.getCreatorVerdict(item.platform, key);
       if (learned) {
@@ -897,9 +900,11 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     const holdMs = Math.max(50, config2.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
     const gradingPromise = gradeItemsDetailed(uncertain, config2, fetchImpl).then(async (verdicts) => {
       for (const item of uncertain) {
-        const v = verdicts.get(item.id)?.verdict;
-        if (v === "k") await memory2.recordVerdict(item, "keep");
-        else if (v === "d") await memory2.recordVerdict(item, "drop");
+        const g = verdicts.get(item.id);
+        if (g?.verdict === "k") await memory2.recordVerdict(item, "keep");
+        else if (g?.verdict === "d") {
+          await memory2.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
+        }
       }
       return verdicts;
     }).catch((err) => {
@@ -1026,15 +1031,18 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         items.set(key, hit);
         return hit.verdict;
       },
+      getItemReason(platform, id) {
+        return items.get(itemMapKey(platform, id))?.reason;
+      },
       getCreatorVerdict(platform, rawKey) {
         const normalized = rawKey.toLowerCase();
         return evaluateCreatorRecord(creators.get(creatorMapKey(platform, normalized)));
       },
-      async recordVerdict(item, verdict) {
+      async recordVerdict(item, verdict, reason) {
         if (verdict === "drop") droppedTotal += 1;
         const now = Date.now();
         const iKey = itemMapKey(item.platform, item.id);
-        const entry = { key: iKey, verdict, at: now };
+        const entry = { key: iKey, verdict, at: now, ...reason ? { reason } : {} };
         if (items.has(iKey)) items.delete(iKey);
         items.set(iKey, entry);
         let evictedKey;
