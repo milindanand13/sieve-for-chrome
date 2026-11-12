@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
 import {
   isRecord,
   type EvaluateSsrItemsResponse,
+  type DimEntry,
   type FeedItem,
   type GraderSettings,
   type ResolveDearrowTitlesResponse,
@@ -16,6 +17,7 @@ import {
 import { createMemoryStore } from "./memory.js";
 import { createNoveltyMemory } from "./novelty.js";
 import { addFixture } from "./fixtures.js";
+import { snippet } from "../core/sink.js";
 import { rewriteResponseBody } from "./rewrite.js";
 import { createStats } from "./stats.js";
 import { matchesInterceptUrl, MAX_STREAM_BYTES } from "../shared/intercept.js";
@@ -92,13 +94,38 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // The one place a rule or grader drop is decided, counted and logged (id -> reason).
-async function evaluate(items: FeedItem[], docKey: string): Promise<Map<string, string>> {
+// In dim mode the grader is not awaited: its drops reach the page later as LATE_DIMS.
+async function evaluate(
+  items: FeedItem[],
+  docKey: string,
+  target?: { tabId: number; frameId: number },
+): Promise<Map<string, string>> {
   const dropped = await runSieveDetailed(items, config, seeds, memory, fetch, novelty, {
+    skipHold: !config.display.hideDropped,
     onGraderError: () => void stats.bumpDiag().catch(() => undefined),
+    onLate: (late) => {
+      void stats.record(docKey, items, late).catch(() => undefined);
+      void getSessionCount().then((n) => setSessionCount(n + late.size)).catch(() => undefined);
+      if (!target) return;
+      const dimmed: DimEntry[] = [];
+      for (const [id, reason] of late) {
+        const item = items.find((i) => i.id === id);
+        if (item) {
+          dimmed.push({ id, alt: item.altId, site: item.platform, reason, text: snippet(item.titleOrText) });
+        }
+      }
+      chrome.tabs
+        .sendMessage(target.tabId, { type: "LATE_DIMS", dimmed }, { frameId: target.frameId })
+        .catch(() => undefined);
+    },
   });
   await stats.record(docKey, items, dropped).catch(() => undefined);
   if (dropped.size > 0) await setSessionCount((await getSessionCount()) + dropped.size);
   return dropped;
+}
+
+function targetOf(sender: chrome.runtime.MessageSender) {
+  return sender.tab?.id === undefined ? undefined : { tabId: sender.tab.id, frameId: sender.frameId ?? 0 };
 }
 
 function docKeyOf(sender: chrome.runtime.MessageSender): string {
@@ -148,7 +175,7 @@ function handle(
     }
     const docKey = docKeyOf(sender);
     return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, {
-      evaluate: (items) => evaluate(items, docKey),
+      evaluate: (items) => evaluate(items, docKey, targetOf(sender)),
       recordFixture: addFixture,
     }).then(async (res) => {
       if (!res) return { body: null };
@@ -205,7 +232,7 @@ function handle(
       (item): item is FeedItem =>
         isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string",
     );
-    return evaluate(items, docKeyOf(sender)).then(
+    return evaluate(items, docKeyOf(sender), targetOf(sender)).then(
       (dropped): EvaluateSsrItemsResponse => ({
         dropped: [...dropped.keys()],
         reasons: Object.fromEntries(dropped),

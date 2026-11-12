@@ -197,6 +197,36 @@ describe("dim lists", () => {
   });
 });
 
+describe("late grader verdicts", () => {
+  it("skipHold returns at once and delivers grader drops through onLate", async () => {
+    const { mem } = fakeMemory();
+    let late: Map<string, string> | undefined;
+    const out = await runSieveDetailed(
+      [item("v1", "one")],
+      DEFAULT_CONFIG,
+      seeds,
+      mem,
+      fetchReply('{"drop":["0"],"why":{"0":"bait"}}'),
+      undefined,
+      { skipHold: true, onLate: (l) => (late = l) },
+    );
+    expect(out.size).toBe(0);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(late?.get("v1")).toBe("grader: bait");
+  });
+
+  it("grades more than 20 items in chunks instead of ignoring the rest", async () => {
+    const { mem, recorded } = fakeMemory();
+    const many = Array.from({ length: 45 }, (_, i) => item(`v${i}`, `video ${i}`));
+    await runSieveDetailed(many, DEFAULT_CONFIG, seeds, mem, (async (_u: unknown, init: RequestInit) => {
+      const n = (JSON.parse(String((init as { body: string }).body)).messages[1].content as string).match(/"i":/g)!.length;
+      const reply = JSON.stringify(Object.fromEntries(Array.from({ length: n }, (_, k) => [String(k), "k"])));
+      return new Response(JSON.stringify({ choices: [{ message: { content: reply } }] }), { status: 200 });
+    }) as unknown as typeof fetch);
+    expect(recorded).toHaveLength(45);
+  });
+});
+
 describe("stats", () => {
   function memKv(): KeyValueStore & { data: Record<string, unknown> } {
     const data: Record<string, unknown> = {};

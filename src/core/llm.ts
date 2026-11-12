@@ -127,11 +127,30 @@ export async function gradeItemsBatch(
   return dropped;
 }
 
-/** Items past MAX_BATCH_SIZE are not graded and get no verdict. */
+/** Grades any number of items in sequential chunks of 20. A failure after the first chunk keeps earlier verdicts. */
 export async function gradeItemsDetailed(
   items: FeedItem[],
   config: SieveConfig,
   fetchImpl: typeof fetch = fetch,
+): Promise<Map<string, GraderVerdict>> {
+  const out = new Map<string, GraderVerdict>();
+  for (let i = 0; i < items.length; i += MAX_BATCH_SIZE) {
+    try {
+      for (const [id, v] of await gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config, fetchImpl)) {
+        out.set(id, v);
+      }
+    } catch (err) {
+      if (out.size === 0) throw err;
+      break;
+    }
+  }
+  return out;
+}
+
+async function gradeChunk(
+  items: FeedItem[],
+  config: SieveConfig,
+  fetchImpl: typeof fetch,
 ): Promise<Map<string, GraderVerdict>> {
   if (config.grader.mode === "off" || items.length === 0) return new Map();
   if (!config.grader.endpoint || !config.grader.model) {
@@ -141,7 +160,7 @@ export async function gradeItemsDetailed(
     throw new Error("Missing API key");
   }
 
-  const batch = items.slice(0, MAX_BATCH_SIZE);
+  const batch = items;
   const orderedIds = batch.map((item) => item.id);
 
   const controller = new AbortController();

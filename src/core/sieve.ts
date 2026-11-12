@@ -143,6 +143,18 @@ export function evaluateLocalTiers(
 export interface SieveHooks {
   /** Called when the grader request fails or times out (item then fails open). */
   onGraderError?: (err: unknown) => void;
+  /** Do not wait for the grader at all (dim mode): its drops arrive through onLate. */
+  skipHold?: boolean;
+  /** Grader drops that finished after the batch was already returned (id -> reason). */
+  onLate?: (dropped: Map<string, string>) => void;
+}
+
+function graderDrops(verdicts: Map<string, GraderVerdict>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [id, v] of verdicts) {
+    if (v.verdict === "d") out.set(id, v.why ? `grader: ${v.why}` : "grader");
+  }
+  return out;
 }
 
 /** Drops with reasons: id -> reason. This is the one place a graded or rule drop is decided. */
@@ -189,18 +201,24 @@ export async function runSieveDetailed(
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = Symbol("timeout");
-  const outcome = await Promise.race([
-    gradingPromise,
-    new Promise<typeof timedOut>((resolve) => {
-      timer = setTimeout(() => resolve(timedOut), holdMs);
-    }),
-  ]);
+  const outcome = hooks.skipHold
+    ? timedOut
+    : await Promise.race([
+        gradingPromise,
+        new Promise<typeof timedOut>((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), holdMs);
+        }),
+      ]);
   if (timer) clearTimeout(timer);
 
-  if (outcome !== timedOut) {
-    for (const [id, v] of outcome) {
-      if (v.verdict === "d") dropped.set(id, v.why ? `grader: ${v.why}` : "grader");
-    }
+  if (outcome === timedOut) {
+    // Too slow to wait for: deliver the grader's drops to the page when they arrive.
+    void gradingPromise.then((verdicts) => {
+      const late = graderDrops(verdicts);
+      if (late.size > 0) hooks.onLate?.(late);
+    });
+  } else {
+    for (const [id, reason] of graderDrops(outcome)) dropped.set(id, reason);
   }
 
   return dropped;
