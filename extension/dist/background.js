@@ -199,6 +199,20 @@ Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`
     return dropped;
   }
   async function gradeItemsDetailed(items, config2, fetchImpl = fetch) {
+    const out = /* @__PURE__ */ new Map();
+    for (let i = 0; i < items.length; i += MAX_BATCH_SIZE) {
+      try {
+        for (const [id, v] of await gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config2, fetchImpl)) {
+          out.set(id, v);
+        }
+      } catch (err) {
+        if (out.size === 0) throw err;
+        break;
+      }
+    }
+    return out;
+  }
+  async function gradeChunk(items, config2, fetchImpl) {
     if (config2.grader.mode === "off" || items.length === 0) return /* @__PURE__ */ new Map();
     if (!config2.grader.endpoint || !config2.grader.model) {
       throw new Error("Missing grader endpoint or model");
@@ -206,7 +220,7 @@ Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`
     if (config2.grader.mode === "api" && !config2.grader.apiKey.trim()) {
       throw new Error("Missing API key");
     }
-    const batch = items.slice(0, MAX_BATCH_SIZE);
+    const batch = items;
     const orderedIds = batch.map((item) => item.id);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BACKGROUND_TIMEOUT_MS);
@@ -859,6 +873,13 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     }
     return { verdict: "uncertain", reason: "uncertain" };
   }
+  function graderDrops(verdicts) {
+    const out = /* @__PURE__ */ new Map();
+    for (const [id, v] of verdicts) {
+      if (v.verdict === "d") out.set(id, v.why ? `grader: ${v.why}` : "grader");
+    }
+    return out;
+  }
   async function runSieveDetailed(items, config2, seeds2, memory2, fetchImpl = fetch, novelty2, hooks = {}) {
     const dropped = /* @__PURE__ */ new Map();
     const uncertain = [];
@@ -887,17 +908,20 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     });
     let timer;
     const timedOut = Symbol("timeout");
-    const outcome = await Promise.race([
+    const outcome = hooks.skipHold ? timedOut : await Promise.race([
       gradingPromise,
       new Promise((resolve) => {
         timer = setTimeout(() => resolve(timedOut), holdMs);
       })
     ]);
     if (timer) clearTimeout(timer);
-    if (outcome !== timedOut) {
-      for (const [id, v] of outcome) {
-        if (v.verdict === "d") dropped.set(id, v.why ? `grader: ${v.why}` : "grader");
-      }
+    if (outcome === timedOut) {
+      void gradingPromise.then((verdicts) => {
+        const late = graderDrops(verdicts);
+        if (late.size > 0) hooks.onLate?.(late);
+      });
+    } else {
+      for (const [id, reason] of graderDrops(outcome)) dropped.set(id, reason);
     }
     return dropped;
   }
@@ -1356,7 +1380,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   // src/background/fixtures.ts
   var DB_NAME2 = "sieve_fixtures_v1";
   var STORE = "samples";
-  var FIXTURE_CAP = 40;
+  var FIXTURE_CAP = 60;
   function openDb2() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME2, 1);
@@ -1372,16 +1396,30 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       tx.onabort = () => reject(tx.error);
     });
   }
+  var SITE_CAP = 25;
   async function addFixture(site, rawUrl, body) {
     const u = new URL(rawUrl);
     const db = await openDb2();
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
-    store.add({ site, url: u.origin + u.pathname, time: Date.now(), body });
-    const keysReq = store.getAllKeys();
-    keysReq.onsuccess = () => {
-      const extra = keysReq.result.length - FIXTURE_CAP;
-      for (let i = 0; i < extra; i++) store.delete(keysReq.result[i]);
+    const cursorReq = store.openCursor();
+    const rows = [];
+    cursorReq.onsuccess = () => {
+      const cur = cursorReq.result;
+      if (cur) {
+        const row = cur.value;
+        rows.push({ key: cur.key, site: row.site, same: row.site === site && row.body === body });
+        cur.continue();
+        return;
+      }
+      if (rows.some((r) => r.same)) return;
+      store.add({ site, url: u.origin + u.pathname, time: Date.now(), body });
+      const own = rows.filter((r) => r.site === site);
+      for (const r of own.slice(0, Math.max(0, own.length + 1 - SITE_CAP))) {
+        store.delete(r.key);
+        rows.splice(rows.indexOf(r), 1);
+      }
+      for (const r of rows.slice(0, Math.max(0, rows.length + 1 - FIXTURE_CAP))) store.delete(r.key);
     };
     await done(tx);
     db.close();
@@ -2377,14 +2415,15 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         return false;
     }
   }
+  var MIN_FIXTURE_CHARS = 2048;
   async function rewriteResponseBody(rawUrl, pageUrl, text, config2, deps) {
     try {
       const url = new URL(rawUrl);
       const site = siteForHost(url.hostname);
-      if (config2.recorder.enabled && site && deps.recordFixture) {
+      if (!shouldFilterUrl(url, config2)) return null;
+      if (config2.recorder.enabled && site && deps.recordFixture && text.length >= MIN_FIXTURE_CHARS) {
         await deps.recordFixture(site, rawUrl, text).catch(() => void 0);
       }
-      if (!shouldFilterUrl(url, config2)) return null;
       const json = JSON.parse(text);
       const sink = createSink(config2.display.hideDropped);
       const decide = async (items) => {
@@ -2585,13 +2624,30 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       config = mergeConfig(changes.sieveConfig.newValue);
     }
   });
-  async function evaluate(items, docKey) {
+  async function evaluate(items, docKey, target) {
     const dropped = await runSieveDetailed(items, config, seeds, memory, fetch, novelty, {
-      onGraderError: () => void stats.bumpDiag().catch(() => void 0)
+      skipHold: !config.display.hideDropped,
+      onGraderError: () => void stats.bumpDiag().catch(() => void 0),
+      onLate: (late) => {
+        void stats.record(docKey, items, late).catch(() => void 0);
+        void getSessionCount().then((n) => setSessionCount(n + late.size)).catch(() => void 0);
+        if (!target) return;
+        const dimmed = [];
+        for (const [id, reason] of late) {
+          const item = items.find((i) => i.id === id);
+          if (item) {
+            dimmed.push({ id, alt: item.altId, site: item.platform, reason, text: snippet(item.titleOrText) });
+          }
+        }
+        chrome.tabs.sendMessage(target.tabId, { type: "LATE_DIMS", dimmed }, { frameId: target.frameId }).catch(() => void 0);
+      }
     });
     await stats.record(docKey, items, dropped).catch(() => void 0);
     if (dropped.size > 0) await setSessionCount(await getSessionCount() + dropped.size);
     return dropped;
+  }
+  function targetOf(sender) {
+    return sender.tab?.id === void 0 ? void 0 : { tabId: sender.tab.id, frameId: sender.frameId ?? 0 };
   }
   function docKeyOf(sender) {
     return sender.documentId ?? `${sender.tab?.id ?? "x"}:${sender.frameId ?? 0}`;
@@ -2619,7 +2675,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       }
       const docKey = docKeyOf(sender);
       return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, {
-        evaluate: (items) => evaluate(items, docKey),
+        evaluate: (items) => evaluate(items, docKey, targetOf(sender)),
         recordFixture: addFixture
       }).then(async (res) => {
         if (!res) return { body: null };
@@ -2669,7 +2725,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       const items = raw.items.filter(
         (item) => isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string"
       );
-      return evaluate(items, docKeyOf(sender)).then(
+      return evaluate(items, docKeyOf(sender), targetOf(sender)).then(
         (dropped) => ({
           dropped: [...dropped.keys()],
           reasons: Object.fromEntries(dropped)

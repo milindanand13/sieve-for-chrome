@@ -2,7 +2,7 @@
 // the service worker and the options page).
 const DB_NAME = "sieve_fixtures_v1";
 const STORE = "samples";
-export const FIXTURE_CAP = 40;
+export const FIXTURE_CAP = 60;
 
 export interface FixtureRow {
   site: string;
@@ -28,17 +28,35 @@ function done(tx: IDBTransaction): Promise<void> {
   });
 }
 
-/** Stores the origin+path (no query string, which can carry tokens) and the raw body; newest 40 win. */
+export const SITE_CAP = 25;
+
+/**
+ * Stores origin+path (no query string, which can carry tokens) and the raw body.
+ * Exact duplicates are skipped; at most 25 per site and 60 overall, oldest evicted first.
+ */
 export async function addFixture(site: string, rawUrl: string, body: string): Promise<void> {
   const u = new URL(rawUrl);
   const db = await openDb();
   const tx = db.transaction(STORE, "readwrite");
   const store = tx.objectStore(STORE);
-  store.add({ site, url: u.origin + u.pathname, time: Date.now(), body } satisfies FixtureRow);
-  const keysReq = store.getAllKeys();
-  keysReq.onsuccess = () => {
-    const extra = keysReq.result.length - FIXTURE_CAP;
-    for (let i = 0; i < extra; i++) store.delete(keysReq.result[i]!);
+  const cursorReq = store.openCursor();
+  const rows: Array<{ key: IDBValidKey; site: string; same: boolean }> = [];
+  cursorReq.onsuccess = () => {
+    const cur = cursorReq.result;
+    if (cur) {
+      const row = cur.value as FixtureRow;
+      rows.push({ key: cur.key, site: row.site, same: row.site === site && row.body === body });
+      cur.continue();
+      return;
+    }
+    if (rows.some((r) => r.same)) return;
+    store.add({ site, url: u.origin + u.pathname, time: Date.now(), body } satisfies FixtureRow);
+    const own = rows.filter((r) => r.site === site);
+    for (const r of own.slice(0, Math.max(0, own.length + 1 - SITE_CAP))) {
+      store.delete(r.key);
+      rows.splice(rows.indexOf(r), 1);
+    }
+    for (const r of rows.slice(0, Math.max(0, rows.length + 1 - FIXTURE_CAP))) store.delete(r.key);
   };
   await done(tx);
   db.close();

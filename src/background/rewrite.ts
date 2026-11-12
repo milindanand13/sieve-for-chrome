@@ -41,6 +41,8 @@ export function shouldFilterUrl(url: URL, config: SieveConfig): boolean {
   }
 }
 
+const MIN_FIXTURE_CHARS = 2048;
+
 export interface RewriteDeps {
   /** Rule + grader decision for a batch: id -> reason for every dropped item. */
   evaluate: (items: FeedItem[]) => Promise<Map<string, string>>;
@@ -59,10 +61,11 @@ export async function rewriteResponseBody(
   try {
     const url = new URL(rawUrl);
     const site = siteForHost(url.hostname);
-    if (config.recorder.enabled && site && deps.recordFixture) {
+    if (!shouldFilterUrl(url, config)) return null;
+    // Only feed responses worth testing against: not noise endpoints, not tiny bodies.
+    if (config.recorder.enabled && site && deps.recordFixture && text.length >= MIN_FIXTURE_CHARS) {
       await deps.recordFixture(site, rawUrl, text).catch(() => undefined);
     }
-    if (!shouldFilterUrl(url, config)) return null;
 
     const json: unknown = JSON.parse(text);
     const sink = createSink(config.display.hideDropped);

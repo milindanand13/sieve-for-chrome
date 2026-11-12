@@ -455,20 +455,11 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   function markCard(card, reason, direct = false) {
     if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
     if (direct) card.dataset.sieveDimDirect = "1";
-    let label = card.querySelector(":scope > .sieve-label");
-    if (!label) {
-      label = document.createElement("span");
-      label.className = "sieve-label";
-      card.prepend(label);
-    }
-    const text = `sieve: ${reason}`;
-    if (label.textContent !== text) label.textContent = text;
-    card.dataset.sieveDimReason = reason;
+    if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
   }
   function unmarkCard(card) {
     delete card.dataset.sieveDim;
     delete card.dataset.sieveDimReason;
-    card.querySelector(":scope > .sieve-label")?.remove();
   }
   function rememberDim(id, reason) {
     if (!id) return;
@@ -507,6 +498,10 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   }
   function bootSiteAdapter(onConfig) {
     installInterceptRelay();
+    chrome.runtime.onMessage.addListener((msg, sender) => {
+      if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
+      if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed);
+    });
     const baseOnConfig = onConfig;
     onConfig = (cfg) => {
       if (document.documentElement) {
