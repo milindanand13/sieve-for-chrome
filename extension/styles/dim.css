@@ -1,10 +1,12 @@
-/* Graded drops stay in the page: dimmed, labelled, still clickable. display.hideDropped hides them. */
-[data-sieve-dim="1"] > :not(.sieve-label) {
+/* Graded drops stay in the page: dimmed, labelled, still clickable. display.hideDropped hides them.
+   The label is a pseudo-element: never insert nodes into React-managed feeds. */
+[data-sieve-dim="1"] > * {
   opacity: 0.25;
   filter: grayscale(1);
 }
 
-[data-sieve-dim="1"] > .sieve-label {
+[data-sieve-dim="1"]::before {
+  content: "sieve: " attr(data-sieve-dim-reason);
   display: block;
   font: 11px/1.4 ui-monospace, "JetBrains Mono", monospace;
   padding: 2px 6px;

@@ -73,24 +73,20 @@ export interface DimSite {
 }
 let dimSite: DimSite | undefined;
 
+/**
+ * Marks a card with data attributes only. The reason label is a CSS ::before (dim.css), so no
+ * node is added inside framework-managed (React) subtrees: inserting one made Instagram's
+ * feed throw on re-render and go blank.
+ */
 export function markCard(card: HTMLElement, reason: string, direct = false): void {
   if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
   if (direct) card.dataset.sieveDimDirect = "1";
-  let label = card.querySelector<HTMLElement>(":scope > .sieve-label");
-  if (!label) {
-    label = document.createElement("span");
-    label.className = "sieve-label";
-    card.prepend(label);
-  }
-  const text = `sieve: ${reason}`;
-  if (label.textContent !== text) label.textContent = text;
-  card.dataset.sieveDimReason = reason;
+  if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
 }
 
 function unmarkCard(card: HTMLElement): void {
   delete card.dataset.sieveDim;
   delete card.dataset.sieveDimReason;
-  card.querySelector(":scope > .sieve-label")?.remove();
 }
 
 export function rememberDim(id: string, reason: string): void {
@@ -135,6 +131,11 @@ export function installDimMarker(site: DimSite): void {
 
 export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
   installInterceptRelay();
+  // Grader verdicts that finished after the response was already delivered.
+  chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
+    if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
+    if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed as DimEntry[]);
+  });
   const baseOnConfig = onConfig;
   onConfig = (cfg) => {
     if (document.documentElement) {
