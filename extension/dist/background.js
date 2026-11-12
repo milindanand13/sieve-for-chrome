@@ -2717,4 +2717,22 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     return true;
   });
   void ensureReady();
+  void chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [1],
+    addRules: [
+      {
+        id: 1,
+        priority: 1,
+        action: {
+          type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+          requestHeaders: [{ header: "origin", operation: chrome.declarativeNetRequest.HeaderOperation.REMOVE }]
+        },
+        condition: {
+          regexFilter: "^http://(127\\.0\\.0\\.1|localhost):11434/",
+          tabIds: [-1],
+          resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST, chrome.declarativeNetRequest.ResourceType.OTHER]
+        }
+      }
+    ]
+  });
 })();

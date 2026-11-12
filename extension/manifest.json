@@ -43,15 +43,6 @@
     "page": "ui/options.html",
     "open_in_tab": true
   },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "origin_strip",
-        "enabled": true,
-        "path": "rules/origin-strip.json"
-      }
-    ]
-  },
   "content_scripts": [
     {
       "matches": [

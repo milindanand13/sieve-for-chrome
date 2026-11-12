@@ -261,3 +261,24 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
 });
 
 void ensureReady();
+
+// Ollama returns 403 to chrome-extension:// origins. Session rules (unlike static ones) may use tabIds,
+// so -1 limits this to requests made by the extension itself, not by pages.
+void chrome.declarativeNetRequest.updateSessionRules({
+  removeRuleIds: [1],
+  addRules: [
+    {
+      id: 1,
+      priority: 1,
+      action: {
+        type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+        requestHeaders: [{ header: "origin", operation: chrome.declarativeNetRequest.HeaderOperation.REMOVE }],
+      },
+      condition: {
+        regexFilter: "^http://(127\\.0\\.0\\.1|localhost):11434/",
+        tabIds: [-1],
+        resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST, chrome.declarativeNetRequest.ResourceType.OTHER],
+      },
+    },
+  ],
+});
