@@ -229,7 +229,8 @@ Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`
             seed: 42,
             keep_alive: "30m",
             // Ollama: turn off qwen3.x reasoning output. Unknown fields are ignored by servers.
-            think: false,
+            reasoning_effort: "none",
+            // Ollama /v1 ignores think:false (8s); this gives ~0.25s
             response_format: { type: "json_object" }
           } : {},
           messages: [
