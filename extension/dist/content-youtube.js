@@ -393,6 +393,30 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     };
   }
 
+  // src/shared/intercept.ts
+  var INTERCEPT_TAG = "sieve-intercept-v1";
+  var MAX_STREAM_BYTES = 12 * 1024 * 1024;
+  var INTERCEPT_URLS = [
+    "https://www.youtube.com/youtubei/v1/browse*",
+    "https://www.youtube.com/youtubei/v1/next*",
+    "https://www.youtube.com/youtubei/v1/search*",
+    "https://m.youtube.com/youtubei/v1/browse*",
+    "https://m.youtube.com/youtubei/v1/next*",
+    "https://m.youtube.com/youtubei/v1/search*",
+    "https://x.com/i/api/graphql/*",
+    "https://twitter.com/i/api/graphql/*",
+    "https://www.instagram.com/graphql/query*",
+    "https://www.instagram.com/api/v1/clips/home/*",
+    "https://www.instagram.com/api/v1/feed/timeline/*",
+    "https://i.instagram.com/api/v1/clips/home/*",
+    "https://i.instagram.com/api/v1/feed/timeline/*",
+    "https://www.tiktok.com/api/recommend/item_list/*",
+    "https://www.tiktok.com/api/post/item_list/*"
+  ];
+  var INTERCEPT_RES = INTERCEPT_URLS.map(
+    (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
+  );
+
   // src/content/shared.ts
   var LOCAL_CACHE_KEY = "__sieve_cached_flags_v1";
   function readCachedFlags() {
@@ -425,7 +449,23 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     } catch {
     }
   }
+  var relayInstalled = false;
+  function installInterceptRelay() {
+    if (relayInstalled) return;
+    relayInstalled = true;
+    window.addEventListener("message", (event) => {
+      if (event.source !== window) return;
+      const d = event.data;
+      if (!isRecord(d) || d.tag !== INTERCEPT_TAG || d.dir !== "req" || typeof d.id !== "string") {
+        return;
+      }
+      const id = d.id;
+      const reply = (body) => window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
+      chrome.runtime.sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body }).then((res) => reply(isRecord(res) && typeof res.body === "string" ? res.body : null)).catch(() => reply(null));
+    });
+  }
   function bootSiteAdapter(onConfig) {
+    installInterceptRelay();
     const cached = readCachedFlags();
     if (document.documentElement) {
       for (const [k, v] of Object.entries(cached)) {
@@ -433,13 +473,13 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       }
     }
     let current = structuredClone(DEFAULT_CONFIG);
-    void browser.storage.local.get("sieveConfig").then((stored) => {
+    void chrome.storage.local.get("sieveConfig").then((stored) => {
       current = mergeConfig(stored.sieveConfig);
       onConfig(current);
     }).catch(() => {
       onConfig(current);
     });
-    browser.storage.onChanged.addListener((changes, area) => {
+    chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes.sieveConfig) {
         current = mergeConfig(changes.sieveConfig.newValue);
         onConfig(current);
@@ -469,7 +509,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
   async function evaluateDomBatch(items, onDrop) {
     if (items.length === 0) return;
     try {
-      const res = await browser.runtime.sendMessage({
+      const res = await chrome.runtime.sendMessage({
         type: "EVALUATE_SSR_ITEMS",
         items
       });
@@ -513,7 +553,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
                 if (text.length >= 24) {
                   recorded.add(target);
                   io.unobserve(target);
-                  void browser.runtime.sendMessage({ type: "RECORD_DWELL", text }).catch(() => {
+                  void chrome.runtime.sendMessage({ type: "RECORD_DWELL", text }).catch(() => {
                   });
                 }
               }, dwellMs);
@@ -573,7 +613,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     });
     if (titleElsByVid.size === 0) return;
     try {
-      const res = await browser.runtime.sendMessage({
+      const res = await chrome.runtime.sendMessage({
         type: "RESOLVE_DEARROW_TITLES",
         videoIds: [...titleElsByVid.keys()].slice(0, 16)
       });

@@ -392,9 +392,9 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     return card;
   }
   async function initPopup() {
-    const stored = await browser.storage.local.get("sieveConfig");
+    const stored = await chrome.storage.local.get("sieveConfig");
     const config = mergeConfig(stored.sieveConfig);
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const detected = detectPlatformFromUrl(tabs[0]?.url);
     const siteLabel = document.getElementById("active-site");
     const rawMaster = document.getElementById("master-enabled");
@@ -409,7 +409,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       siteLabel.textContent = matchedCard ? matchedCard.title : "all sites";
     }
     const saveAndRerender = async () => {
-      await browser.storage.local.set({ sieveConfig: config });
+      await chrome.storage.local.set({ sieveConfig: config });
       renderAll();
       updateStatusMode();
     };
@@ -502,7 +502,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     }
     renderAll();
     try {
-      const status = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+      const status = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
       if (isRecord(status) && typeof status.sessionFilteredCount === "number") {
         cachedCount = status.sessionFilteredCount;
       }
@@ -511,11 +511,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       if (statusLine) statusLine.textContent = DEFAULT_CONFIG.grader.mode;
     }
     document.getElementById("open-options")?.addEventListener("click", () => {
-      void browser.runtime.openOptionsPage();
+      void chrome.runtime.openOptionsPage();
       window.close();
     });
   }
-  if (typeof browser !== "undefined" && browser.storage) {
+  if (typeof chrome !== "undefined" && chrome.storage) {
     void initOptionsThemeGuard();
     void initPopup();
   }

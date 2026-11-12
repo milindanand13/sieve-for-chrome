@@ -12,16 +12,9 @@ cd ~/sieve
 
 ---
 
-## 2. Load in Firefox
+## 2. Load in Chrome
 
-Open [`about:debugging#/runtime/this-firefox`](about:debugging#/runtime/this-firefox), click **Load Temporary Add-on...**, and select `~/sieve/extension/manifest.json`.
-
-For a persistent unsigned `.zip` on Firefox Developer Edition or Nightly (with `xpinstall.signatures.required` set to `false` in `about:config`):
-
-```bash
-npm install
-npx web-ext build -s extension -a dist
-```
+Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and select `~/sieve/extension`.
 
 ---
 

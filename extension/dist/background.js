@@ -1,5 +1,356 @@
 "use strict";
 (() => {
+  // src/types.ts
+  function isRecord(v) {
+    return typeof v === "object" && v !== null && !Array.isArray(v);
+  }
+
+  // src/core/dearrow.ts
+  var DEARROW_MIRROR_BASE = "https://dearrow.minibomba.pro/sbserver/api/branding";
+  var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
+  var FETCH_TIMEOUT_MS = 2500;
+  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed)\b|\.\.\.\s*$|\?!|!\?)/i;
+  var titleCache = /* @__PURE__ */ new Map();
+  var fetchedPrefixes = /* @__PURE__ */ new Map();
+  async function sha256Prefix4(input) {
+    const bytes = new TextEncoder().encode(input);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const view = new Uint8Array(digest);
+    const b0 = view[0]?.toString(16).padStart(2, "0") ?? "00";
+    const b1 = view[1]?.toString(16).padStart(2, "0") ?? "00";
+    return `${b0}${b1}`;
+  }
+  function cleanDeArrowTitle(raw) {
+    return raw.replace(/(^|\s)>(\S)/g, "$1$2").replace(/\s+/g, " ").trim();
+  }
+  function isVagueClickbaitTitle(title) {
+    if (!title) return false;
+    if (VAGUE_TITLE_RE.test(title)) return true;
+    const letters = title.replace(/[^A-Za-z]/g, "");
+    if (letters.length >= 10) {
+      const upper = letters.replace(/[^A-Z]/g, "").length;
+      if (upper / letters.length >= 0.7) return true;
+    }
+    return false;
+  }
+  function getCachedDeArrowTitle(videoId) {
+    return titleCache.get(videoId) ?? void 0;
+  }
+  function clearDeArrowCache() {
+    titleCache.clear();
+    fetchedPrefixes.clear();
+  }
+  function pickBestCommunityTitle(record) {
+    if (!isRecord(record) || !Array.isArray(record.titles)) return null;
+    for (const candidate of record.titles) {
+      if (!isRecord(candidate) || candidate.original === true) continue;
+      const votes = typeof candidate.votes === "number" ? candidate.votes : -1;
+      if (candidate.locked !== true && votes < 0) continue;
+      if (typeof candidate.title !== "string") continue;
+      const cleaned = cleanDeArrowTitle(candidate.title);
+      if (cleaned.length >= 4) return cleaned;
+    }
+    return null;
+  }
+  async function lookupDeArrowTitles(videoIds, fetchImpl = fetch) {
+    const result = /* @__PURE__ */ new Map();
+    const uniqueIds = [...new Set(videoIds.filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id)))];
+    if (uniqueIds.length === 0) return result;
+    const now = Date.now();
+    const prefixesToFetch = /* @__PURE__ */ new Map();
+    for (const vid of uniqueIds) {
+      if (titleCache.has(vid)) {
+        const hit = titleCache.get(vid);
+        if (hit) result.set(vid, hit);
+        continue;
+      }
+      const prefix = await sha256Prefix4(vid);
+      const fetchedAt = fetchedPrefixes.get(prefix);
+      if (fetchedAt && now - fetchedAt < BUCKET_TTL_MS) {
+        titleCache.set(vid, null);
+        continue;
+      }
+      let list = prefixesToFetch.get(prefix);
+      if (!list) {
+        list = [];
+        prefixesToFetch.set(prefix, list);
+      }
+      list.push(vid);
+    }
+    const prefixEntries = [...prefixesToFetch.entries()].slice(0, 6);
+    await Promise.all(
+      prefixEntries.map(async ([prefix, requestedVids]) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        try {
+          const res = await fetchImpl(`${DEARROW_MIRROR_BASE}/${prefix}`, {
+            signal: controller.signal
+          });
+          if (!res.ok) return;
+          const bucket = await res.json();
+          if (!isRecord(bucket)) return;
+          fetchedPrefixes.set(prefix, now);
+          for (const [vid, rec] of Object.entries(bucket)) {
+            titleCache.set(vid, pickBestCommunityTitle(rec));
+          }
+          for (const reqVid of requestedVids) {
+            if (!titleCache.has(reqVid)) titleCache.set(reqVid, null);
+            const hit = titleCache.get(reqVid);
+            if (hit) result.set(reqVid, hit);
+          }
+        } catch {
+        } finally {
+          clearTimeout(timer);
+        }
+      })
+    );
+    return result;
+  }
+
+  // src/core/llm.ts
+  var MAX_BATCH_SIZE = 20;
+  var BACKGROUND_TIMEOUT_MS = 6e3;
+  function extractJsonObject(raw) {
+    if (!raw) return null;
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
+    const candidate = (fenced?.[1] ?? raw).trim();
+    const braceStart = candidate.indexOf("{");
+    const braceEnd = candidate.lastIndexOf("}");
+    if (braceStart === -1 || braceEnd <= braceStart) return null;
+    try {
+      const parsed = JSON.parse(candidate.slice(braceStart, braceEnd + 1));
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  function parseIndexedVerdicts(raw, orderedIds) {
+    const dropped = /* @__PURE__ */ new Set();
+    const parsed = extractJsonObject(raw);
+    if (!parsed) return dropped;
+    const validSet = new Set(orderedIds);
+    if (Array.isArray(parsed.drop)) {
+      for (const id of parsed.drop) {
+        if (typeof id === "string" && validSet.has(id)) dropped.add(id);
+      }
+      return dropped;
+    }
+    for (const [key, val] of Object.entries(parsed)) {
+      if (typeof val !== "string") continue;
+      const v = val.trim().toLowerCase();
+      if (v !== "d" && v !== "drop") continue;
+      if (/^\d+$/.test(key)) {
+        const mappedId = orderedIds[Number.parseInt(key, 10)];
+        if (mappedId) dropped.add(mappedId);
+      } else if (validSet.has(key)) {
+        dropped.add(key);
+      }
+    }
+    return dropped;
+  }
+  function summarizeIndexedItem(item, index) {
+    return {
+      i: String(index),
+      p: item.platform,
+      by: item.creatorHandle || item.creatorId || "",
+      text: item.titleOrText.slice(0, 240),
+      ...item.secondaryText ? { ctx: item.secondaryText.slice(0, 180) } : {},
+      ...item.durationSec ? { dur: item.durationSec } : {}
+    };
+  }
+  var VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with one letter:
+- "k" = keep (engineering, hardware, software, science, space, design, art, photography, music, demos, links, dry humor/jokes, opinions, weird rabbit holes, or normal human updates even if only a few words long)
+- "u" = unsure or neutral (kept by default when in doubt)
+- "d" = confident drop (ONLY clear ragebait, public humiliation/dunk clips, political/culture-war outrage, celebrity/influencer gossip, crypto/memecoin shills, hustle-bro/DM-funnel bait, short-drama cliffhangers, or AI voiceover sleep-slop)
+
+Return ONLY a JSON object mapping every index to "k", "u", or "d", like {"0":"k","1":"u","2":"d"}.`;
+  function readFirstChoiceContent(body) {
+    if (!isRecord(body) || !Array.isArray(body.choices)) return "";
+    const first = body.choices[0];
+    if (!isRecord(first) || !isRecord(first.message)) return "";
+    return typeof first.message.content === "string" ? first.message.content : "";
+  }
+  async function gradeItemsBatch(items, config2, fetchImpl = fetch) {
+    if (config2.grader.mode === "off" || items.length === 0) return /* @__PURE__ */ new Set();
+    if (!config2.grader.endpoint || !config2.grader.model) {
+      throw new Error("Missing grader endpoint or model");
+    }
+    if (config2.grader.mode === "api" && !config2.grader.apiKey.trim()) {
+      throw new Error("Missing API key");
+    }
+    const batch = items.slice(0, MAX_BATCH_SIZE);
+    const orderedIds = batch.map((item) => item.id);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), BACKGROUND_TIMEOUT_MS);
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (config2.grader.apiKey.trim()) {
+      headers.Authorization = `Bearer ${config2.grader.apiKey.trim()}`;
+    }
+    const isLocal = config2.grader.mode === "local";
+    try {
+      const res = await fetchImpl(config2.grader.endpoint, {
+        method: "POST",
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: config2.grader.model,
+          temperature: 0,
+          ...isLocal ? {
+            seed: 42,
+            keep_alive: "30m",
+            response_format: { type: "json_object" }
+          } : {},
+          messages: [
+            {
+              role: "system",
+              content: `${config2.grader.rubric.trim()}
+
+${VERDICT_OUTPUT_INSTRUCTIONS}`
+            },
+            {
+              role: "user",
+              content: JSON.stringify(batch.map(summarizeIndexedItem))
+            }
+          ]
+        })
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = await res.json();
+      return parseIndexedVerdicts(readFirstChoiceContent(body), orderedIds);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // src/defaults.ts
+  var SCHEMA_VERSION = 1;
+  var DEFAULT_RUBRIC = `Evaluate each item across four axes:
+1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.
+2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.
+3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.
+4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.
+
+Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
+
+Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
+  var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
+  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
+  var DEFAULT_CONFIG = {
+    schemaVersion: SCHEMA_VERSION,
+    enabled: true,
+    passFollowed: true,
+    noveltyFilter: true,
+    youtube: {
+      enabled: true,
+      caliberFilter: true,
+      hideShorts: true,
+      cleanHeader: true,
+      midFrameThumbs: true,
+      calmTitles: true,
+      dearrowTitles: true
+    },
+    x: {
+      enabled: true,
+      caliberFilter: true,
+      slopCadenceFilter: true,
+      classicBird: true,
+      cleanSidebar: true,
+      cleanNav: true,
+      restoreHeadlines: true
+    },
+    instagram: {
+      enabled: true,
+      caliberFilter: true,
+      filterReels: true,
+      hideClutter: true
+    },
+    tiktok: {
+      enabled: true,
+      caliberFilter: true,
+      cleanChrome: true,
+      lightMode: true,
+      postOnlyMode: false
+    },
+    grader: {
+      mode: "local",
+      endpoint: LOCAL_DEFAULT_ENDPOINT,
+      model: LOCAL_DEFAULT_MODEL,
+      apiKey: "",
+      rubric: DEFAULT_RUBRIC,
+      streamHoldMs: 1500
+    },
+    allowHandles: [],
+    blockHandles: []
+  };
+  function readStringList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item) => typeof item === "string");
+  }
+  function bool(obj, key, fallback) {
+    return typeof obj[key] === "boolean" ? obj[key] : fallback;
+  }
+  function mergeConfig(stored) {
+    if (!isRecord(stored)) return structuredClone(DEFAULT_CONFIG);
+    const yt = isRecord(stored.youtube) ? stored.youtube : {};
+    const x = isRecord(stored.x) ? stored.x : {};
+    const ig = isRecord(stored.instagram) ? stored.instagram : {};
+    const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
+    const gr = isRecord(stored.grader) ? stored.grader : {};
+    const d = DEFAULT_CONFIG;
+    const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      enabled: bool(stored, "enabled", d.enabled),
+      passFollowed: bool(stored, "passFollowed", d.passFollowed),
+      noveltyFilter: bool(stored, "noveltyFilter", d.noveltyFilter),
+      youtube: {
+        enabled: bool(yt, "enabled", d.youtube.enabled),
+        caliberFilter: bool(yt, "caliberFilter", d.youtube.caliberFilter),
+        hideShorts: bool(yt, "hideShorts", d.youtube.hideShorts),
+        cleanHeader: bool(yt, "cleanHeader", d.youtube.cleanHeader),
+        midFrameThumbs: bool(yt, "midFrameThumbs", d.youtube.midFrameThumbs),
+        calmTitles: bool(yt, "calmTitles", d.youtube.calmTitles),
+        dearrowTitles: bool(yt, "dearrowTitles", d.youtube.dearrowTitles)
+      },
+      x: {
+        enabled: bool(x, "enabled", d.x.enabled),
+        caliberFilter: bool(x, "caliberFilter", d.x.caliberFilter),
+        slopCadenceFilter: bool(x, "slopCadenceFilter", d.x.slopCadenceFilter),
+        classicBird: bool(x, "classicBird", d.x.classicBird),
+        cleanSidebar: bool(x, "cleanSidebar", d.x.cleanSidebar),
+        cleanNav: bool(x, "cleanNav", d.x.cleanNav),
+        restoreHeadlines: bool(x, "restoreHeadlines", d.x.restoreHeadlines)
+      },
+      instagram: {
+        enabled: bool(ig, "enabled", d.instagram.enabled),
+        caliberFilter: bool(ig, "caliberFilter", d.instagram.caliberFilter),
+        filterReels: bool(ig, "filterReels", d.instagram.filterReels),
+        hideClutter: bool(ig, "hideClutter", d.instagram.hideClutter)
+      },
+      tiktok: {
+        enabled: bool(tt, "enabled", d.tiktok.enabled),
+        caliberFilter: bool(tt, "caliberFilter", d.tiktok.caliberFilter),
+        cleanChrome: bool(tt, "cleanChrome", d.tiktok.cleanChrome),
+        lightMode: bool(tt, "lightMode", d.tiktok.lightMode),
+        postOnlyMode: bool(tt, "postOnlyMode", d.tiktok.postOnlyMode)
+      },
+      grader: {
+        mode,
+        endpoint: typeof gr.endpoint === "string" ? gr.endpoint : d.grader.endpoint,
+        model: typeof gr.model === "string" ? gr.model : d.grader.model,
+        apiKey: typeof gr.apiKey === "string" ? gr.apiKey : d.grader.apiKey,
+        rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
+        streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
+      },
+      allowHandles: readStringList(stored.allowHandles),
+      blockHandles: readStringList(stored.blockHandles)
+    };
+  }
+
   // src/core/dehype.ts
   var PRESERVED_ACRONYMS = /* @__PURE__ */ new Set([
     "2D",
@@ -253,547 +604,6 @@
     return `https://i.ytimg.com/vi/${resolvedId}/hq2.jpg`;
   }
 
-  // src/types.ts
-  function isRecord(v) {
-    return typeof v === "object" && v !== null && !Array.isArray(v);
-  }
-
-  // src/adapters/instagram-json.ts
-  function isMediaAd(media, wrapper) {
-    if (media.ad_id || media.is_ad === true || media.is_organic_product_tagging_eligible === false && media.ad_action) {
-      return true;
-    }
-    if (isRecord(media.injected) || typeof media.ad_action === "string") return true;
-    if (wrapper && (isRecord(wrapper.ad) || isRecord(wrapper.explore_story) || isRecord(wrapper.suggested_users))) {
-      return true;
-    }
-    return false;
-  }
-  function extractIgMedia(media, surface) {
-    const rawId = media.pk ?? media.id ?? media.code;
-    const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
-    if (!id) return null;
-    let captionText = "";
-    if (isRecord(media.caption) && typeof media.caption.text === "string") {
-      captionText = media.caption.text;
-      media.caption.text = calmTitle(captionText);
-    } else if (isRecord(media.edge_media_to_caption) && Array.isArray(media.edge_media_to_caption.edges) && isRecord(media.edge_media_to_caption.edges[0]) && isRecord(media.edge_media_to_caption.edges[0].node) && typeof media.edge_media_to_caption.edges[0].node.text === "string") {
-      captionText = media.edge_media_to_caption.edges[0].node.text;
-      media.edge_media_to_caption.edges[0].node.text = calmTitle(captionText);
-    }
-    let creatorId;
-    let creatorHandle;
-    let isFollowed = false;
-    if (isRecord(media.user)) {
-      if (media.user.pk != null) creatorId = String(media.user.pk);
-      if (typeof media.user.username === "string") creatorHandle = media.user.username;
-      if (isRecord(media.user.friendship_status) && media.user.friendship_status.following === true) {
-        isFollowed = true;
-      }
-    }
-    let secondaryText;
-    if (isRecord(media.clips_metadata) && isRecord(media.clips_metadata.music_info) && isRecord(media.clips_metadata.music_info.music_asset_info) && typeof media.clips_metadata.music_info.music_asset_info.title === "string") {
-      secondaryText = `audio: ${media.clips_metadata.music_info.music_asset_info.title}`;
-    }
-    const durationSec = typeof media.video_duration === "number" ? media.video_duration : void 0;
-    const likes = typeof media.like_count === "number" ? media.like_count : void 0;
-    const replies = typeof media.comment_count === "number" ? media.comment_count : void 0;
-    return {
-      platform: "instagram",
-      id,
-      creatorId,
-      creatorHandle,
-      isFollowed,
-      surface,
-      titleOrText: captionText || `@${creatorHandle ?? "reel"}`,
-      secondaryText,
-      durationSec,
-      metrics: { likes, replies }
-    };
-  }
-  function isInstagramProfileOrPermalink(pageUrl) {
-    if (!pageUrl) return false;
-    try {
-      const p = new URL(pageUrl).pathname.replace(/\/+$/, "") || "/";
-      if (p === "/" || p === "/reels" || p.startsWith("/reels/")) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  async function filterInstagramJson(data, urlPath, config2, decide, pageUrl) {
-    if (!config2.enabled || !config2.instagram.enabled) return data;
-    if (!isRecord(data)) return data;
-    const onProfileOrPost = isInstagramProfileOrPermalink(pageUrl);
-    const candidates = /* @__PURE__ */ new Map();
-    const slots = [];
-    function processGraphqlConnection(connKey, conn) {
-      if (!Array.isArray(conn.edges)) return;
-      const isUserProfileConn = onProfileOrPost || connKey.includes("user") || !connKey.includes("clips__home") && !connKey.includes("feed__timeline");
-      const isReels = connKey.includes("clips");
-      const surface = isReels ? "reels" : "timeline";
-      const filterActive = !isUserProfileConn && (isReels ? config2.instagram.filterReels : config2.instagram.caliberFilter);
-      const edges = conn.edges;
-      const getMediaFromEdge = (edge) => {
-        if (!isRecord(edge) || !isRecord(edge.node)) return null;
-        if (isRecord(edge.node.media)) return edge.node.media;
-        if (isRecord(edge.node.media_or_ad)) return edge.node.media_or_ad;
-        if (edge.node.pk != null || edge.node.id != null) return edge.node;
-        return null;
-      };
-      for (let i = 0; i < edges.length; i++) {
-        const edge = edges[i];
-        const node = isRecord(edge) && isRecord(edge.node) ? edge.node : void 0;
-        const media = getMediaFromEdge(edge);
-        if (!media) continue;
-        if (isMediaAd(media, node)) {
-          edges.splice(i, 1);
-          i--;
-          continue;
-        }
-        const item = extractIgMedia(media, surface);
-        if (!filterActive || !item) continue;
-        candidates.set(item.id, item);
-        slots.push({
-          list: edges,
-          getMediaId: (el) => {
-            const m = getMediaFromEdge(el);
-            const raw = m?.pk ?? m?.id ?? m?.code;
-            return raw != null ? String(raw) : "";
-          }
-        });
-      }
-    }
-    if (isRecord(data.data)) {
-      for (const [key, val] of Object.entries(data.data)) {
-        if (isRecord(val) && Array.isArray(val.edges)) {
-          processGraphqlConnection(key, val);
-        }
-      }
-    }
-    if (Array.isArray(data.items) && urlPath.includes("/clips/")) {
-      const items = data.items;
-      for (let i = items.length - 1; i >= 0; i--) {
-        const entry = items[i];
-        const media = isRecord(entry) && isRecord(entry.media) ? entry.media : isRecord(entry) ? entry : null;
-        if (!media) continue;
-        if (isMediaAd(media, isRecord(entry) ? entry : void 0)) {
-          items.splice(i, 1);
-          continue;
-        }
-        if (!config2.instagram.filterReels) continue;
-        const item = extractIgMedia(media, "reels");
-        if (item) {
-          candidates.set(item.id, item);
-          slots.push({
-            list: items,
-            getMediaId: (el) => {
-              const m = isRecord(el) && isRecord(el.media) ? el.media : isRecord(el) ? el : null;
-              const raw = m?.pk ?? m?.id ?? m?.code;
-              return raw != null ? String(raw) : "";
-            }
-          });
-        }
-      }
-    }
-    if (Array.isArray(data.feed_items)) {
-      const feedItems = data.feed_items;
-      for (let i = feedItems.length - 1; i >= 0; i--) {
-        const entry = feedItems[i];
-        if (!isRecord(entry)) continue;
-        if (config2.instagram.hideClutter && (entry.suggested_users || entry.explore_story || entry.clips_netego)) {
-          feedItems.splice(i, 1);
-          continue;
-        }
-        const media = isRecord(entry.media_or_ad) ? entry.media_or_ad : null;
-        if (!media) continue;
-        if (isMediaAd(media, entry)) {
-          feedItems.splice(i, 1);
-          continue;
-        }
-        if (!config2.instagram.caliberFilter) continue;
-        const item = extractIgMedia(media, "timeline");
-        if (item) {
-          candidates.set(item.id, item);
-          slots.push({
-            list: feedItems,
-            getMediaId: (el) => {
-              const m = isRecord(el) && isRecord(el.media_or_ad) ? el.media_or_ad : null;
-              const raw = m?.pk ?? m?.id ?? m?.code;
-              return raw != null ? String(raw) : "";
-            }
-          });
-        }
-      }
-    }
-    if (candidates.size === 0) return data;
-    const droppedIds = await decide([...candidates.values()]);
-    if (droppedIds.size === 0) return data;
-    const processedLists = /* @__PURE__ */ new Set();
-    for (const slot of slots) {
-      if (processedLists.has(slot.list)) continue;
-      processedLists.add(slot.list);
-      for (let i = slot.list.length - 1; i >= 0; i--) {
-        const id = slot.getMediaId(slot.list[i]);
-        if (id && droppedIds.has(id)) {
-          slot.list.splice(i, 1);
-        }
-      }
-    }
-    return data;
-  }
-
-  // src/adapters/stream-decode.ts
-  function concatByteChunks(chunks) {
-    if (chunks.length === 0) return new Uint8Array(0);
-    if (chunks.length === 1) return chunks[0];
-    let total = 0;
-    for (const chunk of chunks) total += chunk.byteLength;
-    const merged = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return merged;
-  }
-  function decodeUtf8Chunks(chunks) {
-    if (chunks.length === 0) return "";
-    return new TextDecoder("utf-8", { fatal: false }).decode(concatByteChunks(chunks));
-  }
-
-  // src/adapters/tiktok-json.ts
-  function rewriteTikTokThemeCookieHeader(cookieHeader) {
-    const parts = cookieHeader.split(";").map((p) => p.trim()).filter(Boolean);
-    let sawTheme = false;
-    let sawSource = false;
-    const updated = parts.map((part) => {
-      const eq = part.indexOf("=");
-      const name = eq === -1 ? part : part.slice(0, eq).trim();
-      if (name === "tiktok_webapp_theme") {
-        sawTheme = true;
-        return "tiktok_webapp_theme=light";
-      }
-      if (name === "tiktok_webapp_theme_source") {
-        sawSource = true;
-        return "tiktok_webapp_theme_source=custom";
-      }
-      return part;
-    });
-    if (!sawTheme) updated.push("tiktok_webapp_theme=light");
-    if (!sawSource) updated.push("tiktok_webapp_theme_source=custom");
-    return updated.join("; ");
-  }
-  function isTikTokProfileOrDirectRoute(urlPath, pageUrl) {
-    if (urlPath.includes("/api/post/item_list")) return true;
-    if (!pageUrl) return false;
-    try {
-      const pathname = new URL(pageUrl).pathname;
-      return /(?:^|\/)@[^/]+/.test(pathname);
-    } catch {
-      return false;
-    }
-  }
-  async function filterTikTokJson(data, config2, decide, urlPath = "", pageUrl = "") {
-    if (!config2.enabled || !config2.tiktok.enabled) return data;
-    if (!isRecord(data) || !Array.isArray(data.itemList)) return data;
-    const isProfileSurface = isTikTokProfileOrDirectRoute(urlPath, pageUrl);
-    if (config2.tiktok.postOnlyMode && !isProfileSurface) {
-      data.itemList = [];
-      return data;
-    }
-    const list = data.itemList;
-    const candidates = /* @__PURE__ */ new Map();
-    for (let i = 0; i < list.length; i++) {
-      const raw = list[i];
-      if (!isRecord(raw)) continue;
-      if (raw.isAd === true || isRecord(raw.adInfo)) {
-        list.splice(i, 1);
-        i--;
-        continue;
-      }
-      const desc = typeof raw.desc === "string" ? raw.desc : "";
-      if (typeof raw.desc === "string") {
-        raw.desc = calmTitle(raw.desc);
-      }
-      if (!config2.tiktok.caliberFilter || isProfileSurface) continue;
-      const id = typeof raw.id === "string" ? raw.id : "";
-      if (!id) continue;
-      const author = isRecord(raw.author) ? raw.author : {};
-      const stats = isRecord(raw.stats) ? raw.stats : {};
-      const video = isRecord(raw.video) ? raw.video : {};
-      const followStatus = typeof author.followStatus === "number" ? author.followStatus : 0;
-      candidates.set(id, {
-        platform: "tiktok",
-        id,
-        creatorId: typeof author.id === "string" ? author.id : void 0,
-        creatorHandle: typeof author.uniqueId === "string" ? author.uniqueId : void 0,
-        isFollowed: followStatus === 1 || followStatus === 2,
-        surface: "reels",
-        titleOrText: desc || `@${typeof author.uniqueId === "string" ? author.uniqueId : "tiktok"}`,
-        durationSec: typeof video.duration === "number" ? video.duration : void 0,
-        metrics: {
-          likes: typeof stats.diggCount === "number" ? stats.diggCount : void 0,
-          replies: typeof stats.commentCount === "number" ? stats.commentCount : void 0
-        }
-      });
-    }
-    if (candidates.size === 0) return data;
-    const droppedIds = await decide([...candidates.values()]);
-    if (droppedIds.size === 0) return data;
-    for (let i = list.length - 1; i >= 0; i--) {
-      const entry = list[i];
-      if (isRecord(entry) && typeof entry.id === "string" && droppedIds.has(entry.id)) {
-        list.splice(i, 1);
-      }
-    }
-    return data;
-  }
-
-  // src/defaults.ts
-  var SCHEMA_VERSION = 1;
-  var DEFAULT_RUBRIC = `Evaluate each item across four axes:
-1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.
-2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.
-3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.
-4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.
-
-Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
-
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
-  var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
-  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
-  var DEFAULT_CONFIG = {
-    schemaVersion: SCHEMA_VERSION,
-    enabled: true,
-    passFollowed: true,
-    noveltyFilter: true,
-    youtube: {
-      enabled: true,
-      caliberFilter: true,
-      hideShorts: true,
-      cleanHeader: true,
-      midFrameThumbs: true,
-      calmTitles: true,
-      dearrowTitles: true
-    },
-    x: {
-      enabled: true,
-      caliberFilter: true,
-      slopCadenceFilter: true,
-      classicBird: true,
-      cleanSidebar: true,
-      cleanNav: true,
-      restoreHeadlines: true
-    },
-    instagram: {
-      enabled: true,
-      caliberFilter: true,
-      filterReels: true,
-      hideClutter: true
-    },
-    tiktok: {
-      enabled: true,
-      caliberFilter: true,
-      cleanChrome: true,
-      lightMode: true,
-      postOnlyMode: false
-    },
-    grader: {
-      mode: "local",
-      endpoint: LOCAL_DEFAULT_ENDPOINT,
-      model: LOCAL_DEFAULT_MODEL,
-      apiKey: "",
-      rubric: DEFAULT_RUBRIC,
-      streamHoldMs: 1500
-    },
-    allowHandles: [],
-    blockHandles: []
-  };
-  function readStringList(value) {
-    if (!Array.isArray(value)) return [];
-    return value.filter((item) => typeof item === "string");
-  }
-  function bool(obj, key, fallback) {
-    return typeof obj[key] === "boolean" ? obj[key] : fallback;
-  }
-  function mergeConfig(stored) {
-    if (!isRecord(stored)) return structuredClone(DEFAULT_CONFIG);
-    const yt = isRecord(stored.youtube) ? stored.youtube : {};
-    const x = isRecord(stored.x) ? stored.x : {};
-    const ig = isRecord(stored.instagram) ? stored.instagram : {};
-    const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
-    const gr = isRecord(stored.grader) ? stored.grader : {};
-    const d = DEFAULT_CONFIG;
-    const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      enabled: bool(stored, "enabled", d.enabled),
-      passFollowed: bool(stored, "passFollowed", d.passFollowed),
-      noveltyFilter: bool(stored, "noveltyFilter", d.noveltyFilter),
-      youtube: {
-        enabled: bool(yt, "enabled", d.youtube.enabled),
-        caliberFilter: bool(yt, "caliberFilter", d.youtube.caliberFilter),
-        hideShorts: bool(yt, "hideShorts", d.youtube.hideShorts),
-        cleanHeader: bool(yt, "cleanHeader", d.youtube.cleanHeader),
-        midFrameThumbs: bool(yt, "midFrameThumbs", d.youtube.midFrameThumbs),
-        calmTitles: bool(yt, "calmTitles", d.youtube.calmTitles),
-        dearrowTitles: bool(yt, "dearrowTitles", d.youtube.dearrowTitles)
-      },
-      x: {
-        enabled: bool(x, "enabled", d.x.enabled),
-        caliberFilter: bool(x, "caliberFilter", d.x.caliberFilter),
-        slopCadenceFilter: bool(x, "slopCadenceFilter", d.x.slopCadenceFilter),
-        classicBird: bool(x, "classicBird", d.x.classicBird),
-        cleanSidebar: bool(x, "cleanSidebar", d.x.cleanSidebar),
-        cleanNav: bool(x, "cleanNav", d.x.cleanNav),
-        restoreHeadlines: bool(x, "restoreHeadlines", d.x.restoreHeadlines)
-      },
-      instagram: {
-        enabled: bool(ig, "enabled", d.instagram.enabled),
-        caliberFilter: bool(ig, "caliberFilter", d.instagram.caliberFilter),
-        filterReels: bool(ig, "filterReels", d.instagram.filterReels),
-        hideClutter: bool(ig, "hideClutter", d.instagram.hideClutter)
-      },
-      tiktok: {
-        enabled: bool(tt, "enabled", d.tiktok.enabled),
-        caliberFilter: bool(tt, "caliberFilter", d.tiktok.caliberFilter),
-        cleanChrome: bool(tt, "cleanChrome", d.tiktok.cleanChrome),
-        lightMode: bool(tt, "lightMode", d.tiktok.lightMode),
-        postOnlyMode: bool(tt, "postOnlyMode", d.tiktok.postOnlyMode)
-      },
-      grader: {
-        mode,
-        endpoint: typeof gr.endpoint === "string" ? gr.endpoint : d.grader.endpoint,
-        model: typeof gr.model === "string" ? gr.model : d.grader.model,
-        apiKey: typeof gr.apiKey === "string" ? gr.apiKey : d.grader.apiKey,
-        rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
-        streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
-      },
-      allowHandles: readStringList(stored.allowHandles),
-      blockHandles: readStringList(stored.blockHandles)
-    };
-  }
-
-  // src/core/llm.ts
-  var MAX_BATCH_SIZE = 20;
-  var BACKGROUND_TIMEOUT_MS = 6e3;
-  function extractJsonObject(raw) {
-    if (!raw) return null;
-    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
-    const candidate = (fenced?.[1] ?? raw).trim();
-    const braceStart = candidate.indexOf("{");
-    const braceEnd = candidate.lastIndexOf("}");
-    if (braceStart === -1 || braceEnd <= braceStart) return null;
-    try {
-      const parsed = JSON.parse(candidate.slice(braceStart, braceEnd + 1));
-      return isRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-  function parseIndexedVerdicts(raw, orderedIds) {
-    const dropped = /* @__PURE__ */ new Set();
-    const parsed = extractJsonObject(raw);
-    if (!parsed) return dropped;
-    const validSet = new Set(orderedIds);
-    if (Array.isArray(parsed.drop)) {
-      for (const id of parsed.drop) {
-        if (typeof id === "string" && validSet.has(id)) dropped.add(id);
-      }
-      return dropped;
-    }
-    for (const [key, val] of Object.entries(parsed)) {
-      if (typeof val !== "string") continue;
-      const v = val.trim().toLowerCase();
-      if (v !== "d" && v !== "drop") continue;
-      if (/^\d+$/.test(key)) {
-        const mappedId = orderedIds[Number.parseInt(key, 10)];
-        if (mappedId) dropped.add(mappedId);
-      } else if (validSet.has(key)) {
-        dropped.add(key);
-      }
-    }
-    return dropped;
-  }
-  function summarizeIndexedItem(item, index) {
-    return {
-      i: String(index),
-      p: item.platform,
-      by: item.creatorHandle || item.creatorId || "",
-      text: item.titleOrText.slice(0, 240),
-      ...item.secondaryText ? { ctx: item.secondaryText.slice(0, 180) } : {},
-      ...item.durationSec ? { dur: item.durationSec } : {}
-    };
-  }
-  var VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with one letter:
-- "k" = keep (engineering, hardware, software, science, space, design, art, photography, music, demos, links, dry humor/jokes, opinions, weird rabbit holes, or normal human updates even if only a few words long)
-- "u" = unsure or neutral (kept by default when in doubt)
-- "d" = confident drop (ONLY clear ragebait, public humiliation/dunk clips, political/culture-war outrage, celebrity/influencer gossip, crypto/memecoin shills, hustle-bro/DM-funnel bait, short-drama cliffhangers, or AI voiceover sleep-slop)
-
-Return ONLY a JSON object mapping every index to "k", "u", or "d", like {"0":"k","1":"u","2":"d"}.`;
-  function readFirstChoiceContent(body) {
-    if (!isRecord(body) || !Array.isArray(body.choices)) return "";
-    const first = body.choices[0];
-    if (!isRecord(first) || !isRecord(first.message)) return "";
-    return typeof first.message.content === "string" ? first.message.content : "";
-  }
-  async function gradeItemsBatch(items, config2, fetchImpl = fetch) {
-    if (config2.grader.mode === "off" || items.length === 0) return /* @__PURE__ */ new Set();
-    if (!config2.grader.endpoint || !config2.grader.model) {
-      throw new Error("Missing grader endpoint or model");
-    }
-    if (config2.grader.mode === "api" && !config2.grader.apiKey.trim()) {
-      throw new Error("Missing API key");
-    }
-    const batch = items.slice(0, MAX_BATCH_SIZE);
-    const orderedIds = batch.map((item) => item.id);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BACKGROUND_TIMEOUT_MS);
-    const headers = {
-      "Content-Type": "application/json"
-    };
-    if (config2.grader.apiKey.trim()) {
-      headers.Authorization = `Bearer ${config2.grader.apiKey.trim()}`;
-    }
-    const isLocal = config2.grader.mode === "local";
-    try {
-      const res = await fetchImpl(config2.grader.endpoint, {
-        method: "POST",
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: config2.grader.model,
-          temperature: 0,
-          ...isLocal ? {
-            seed: 42,
-            keep_alive: "30m",
-            response_format: { type: "json_object" }
-          } : {},
-          messages: [
-            {
-              role: "system",
-              content: `${config2.grader.rubric.trim()}
-
-${VERDICT_OUTPUT_INSTRUCTIONS}`
-            },
-            {
-              role: "user",
-              content: JSON.stringify(batch.map(summarizeIndexedItem))
-            }
-          ]
-        })
-      });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      return parseIndexedVerdicts(readFirstChoiceContent(body), orderedIds);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   // src/core/slop-cadence.ts
   var SLOP_LEXICON = [
     "delve",
@@ -1035,826 +845,6 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
       for (const id of outcome) droppedIds.add(id);
     }
     return droppedIds;
-  }
-
-  // src/adapters/twitter-json.ts
-  var NOISE_ENTRY_PREFIXES = [
-    "promoted-",
-    "who-to-follow-",
-    "upsell-",
-    "RelevancePrompt-",
-    "inline-prompt-"
-  ];
-  function isNoiseEntryId(entryId) {
-    return NOISE_ENTRY_PREFIXES.some((prefix) => entryId.startsWith(prefix));
-  }
-  function unwrapTweet(rawResult) {
-    if (!isRecord(rawResult)) return null;
-    if (rawResult.__typename === "TweetWithVisibilityResults" && isRecord(rawResult.tweet)) {
-      return rawResult.tweet;
-    }
-    if (typeof rawResult.rest_id === "string" || isRecord(rawResult.legacy)) {
-      return rawResult;
-    }
-    return null;
-  }
-  function readTweetBody(tweet) {
-    if (isRecord(tweet.note_tweet) && isRecord(tweet.note_tweet.note_tweet_results) && isRecord(tweet.note_tweet.note_tweet_results.result) && typeof tweet.note_tweet.note_tweet_results.result.text === "string") {
-      return tweet.note_tweet.note_tweet_results.result.text;
-    }
-    if (isRecord(tweet.legacy) && typeof tweet.legacy.full_text === "string") {
-      return tweet.legacy.full_text;
-    }
-    return "";
-  }
-  function extractTweetYouTubeIds(tweet) {
-    const urls = [];
-    if (isRecord(tweet.legacy)) {
-      if (typeof tweet.legacy.full_text === "string") urls.push(tweet.legacy.full_text);
-      if (isRecord(tweet.legacy.entities) && Array.isArray(tweet.legacy.entities.urls)) {
-        for (const u of tweet.legacy.entities.urls) {
-          if (isRecord(u) && typeof u.expanded_url === "string") {
-            urls.push(u.expanded_url);
-          }
-        }
-      }
-    }
-    if (isRecord(tweet.card) && isRecord(tweet.card.legacy) && Array.isArray(tweet.card.legacy.binding_values)) {
-      for (const b of tweet.card.legacy.binding_values) {
-        if (isRecord(b) && isRecord(b.value) && typeof b.value.string_value === "string") {
-          urls.push(b.value.string_value);
-        }
-      }
-    }
-    if (isRecord(tweet.quoted_status_result)) {
-      const quoted = unwrapTweet(tweet.quoted_status_result.result);
-      if (quoted) urls.push(...extractTweetYouTubeIds(quoted));
-    }
-    return extractYouTubeIdsFromText(urls.join(" "));
-  }
-  function buildTweetRichContext(tweet) {
-    const parts = [];
-    const legacy = isRecord(tweet.legacy) ? tweet.legacy : {};
-    const mediaHolder = isRecord(legacy.extended_entities) ? legacy.extended_entities : isRecord(legacy.entities) ? legacy.entities : void 0;
-    if (mediaHolder && Array.isArray(mediaHolder.media) && mediaHolder.media.length > 0) {
-      const types = /* @__PURE__ */ new Set();
-      for (const m of mediaHolder.media) {
-        if (isRecord(m) && typeof m.type === "string") {
-          types.add(m.type === "animated_gif" ? "gif" : m.type);
-        }
-      }
-      if (types.size > 0) parts.push(`[${[...types].join("+")}]`);
-    }
-    if (isRecord(legacy.entities) && Array.isArray(legacy.entities.urls)) {
-      for (const u of legacy.entities.urls) {
-        if (isRecord(u) && typeof u.expanded_url === "string") {
-          parts.push(`link: ${u.expanded_url.slice(0, 90)}`);
-        }
-      }
-    }
-    if (isRecord(tweet.card) && isRecord(tweet.card.legacy) && Array.isArray(tweet.card.legacy.binding_values)) {
-      let cardTitle = "";
-      let cardDomain = "";
-      for (const b of tweet.card.legacy.binding_values) {
-        if (!isRecord(b) || typeof b.key !== "string" || !isRecord(b.value)) continue;
-        if (b.key === "title" && typeof b.value.string_value === "string") {
-          cardTitle = b.value.string_value.trim();
-        } else if (b.key === "vanity_url" && typeof b.value.string_value === "string") {
-          cardDomain = b.value.string_value.trim();
-        }
-      }
-      if (cardTitle) {
-        parts.push(`card: ${cardDomain ? `${cardDomain} - ` : ""}${cardTitle}`);
-      }
-    }
-    if (isRecord(tweet.quoted_status_result)) {
-      const quoted = unwrapTweet(tweet.quoted_status_result.result);
-      if (quoted) {
-        const qBody = readTweetBody(quoted).trim();
-        let qAuthor = "";
-        if (isRecord(quoted.core) && isRecord(quoted.core.user_results) && isRecord(quoted.core.user_results.result) && isRecord(quoted.core.user_results.result.legacy) && typeof quoted.core.user_results.result.legacy.screen_name === "string") {
-          qAuthor = `@${quoted.core.user_results.result.legacy.screen_name}`;
-        }
-        if (qBody) {
-          parts.push(`quoting ${qAuthor || "post"}: ${qBody.slice(0, 140)}`);
-        }
-      }
-    }
-    return parts.length > 0 ? parts.join(" | ") : void 0;
-  }
-  function polishTweetPresentation(tweet, config2, ytIds) {
-    if (isRecord(tweet.legacy) && typeof tweet.legacy.full_text === "string") {
-      tweet.legacy.full_text = calmTitle(tweet.legacy.full_text);
-    }
-    if (isRecord(tweet.note_tweet) && isRecord(tweet.note_tweet.note_tweet_results) && isRecord(tweet.note_tweet.note_tweet_results.result) && typeof tweet.note_tweet.note_tweet_results.result.text === "string") {
-      tweet.note_tweet.note_tweet_results.result.text = calmTitle(
-        tweet.note_tweet.note_tweet_results.result.text
-      );
-    }
-    if (isRecord(tweet.quoted_status_result)) {
-      const quoted = unwrapTweet(tweet.quoted_status_result.result);
-      if (quoted) {
-        polishTweetPresentation(quoted, config2, extractTweetYouTubeIds(quoted));
-      }
-    }
-    if (!isRecord(tweet.card) || !isRecord(tweet.card.legacy)) return;
-    const bindings = tweet.card.legacy.binding_values;
-    if (!Array.isArray(bindings)) return;
-    const fallbackYtId = ytIds[0];
-    let titleVal;
-    let vanityEntry;
-    for (const b of bindings) {
-      if (!isRecord(b) || typeof b.key !== "string" || !isRecord(b.value)) continue;
-      if (b.key === "title" && typeof b.value.string_value === "string") {
-        const calmed = calmTitle(b.value.string_value.trim());
-        b.value.string_value = calmed;
-        titleVal = calmed;
-      } else if (b.key === "vanity_url" && typeof b.value.string_value === "string") {
-        vanityEntry = b.value;
-      }
-      if (isRecord(b.value.image_value) && typeof b.value.image_value.url === "string") {
-        const imgUrl = b.value.image_value.url;
-        if (imgUrl.includes("ytimg.com/vi")) {
-          b.value.image_value.url = midFrameThumbUrl(imgUrl, fallbackYtId);
-        }
-      }
-    }
-    if (config2.x.restoreHeadlines && titleVal && vanityEntry && typeof vanityEntry.string_value === "string") {
-      if (!vanityEntry.string_value.includes(" \xB7 ")) {
-        vanityEntry.string_value = `${vanityEntry.string_value} \xB7 ${titleVal}`;
-      }
-    }
-  }
-  function readUserFollowFlag(userContainer) {
-    if (!isRecord(userContainer)) return { following: false };
-    const id = typeof userContainer.rest_id === "string" ? userContainer.rest_id : void 0;
-    let handle;
-    let following = false;
-    if (isRecord(userContainer.legacy)) {
-      if (typeof userContainer.legacy.screen_name === "string") {
-        handle = userContainer.legacy.screen_name;
-      }
-      if (userContainer.legacy.following === true) following = true;
-    }
-    if (isRecord(userContainer.relationship_perspectives) && userContainer.relationship_perspectives.following === true) {
-      following = true;
-    }
-    return { id, handle, following };
-  }
-  function extractTweetItem(tweet, surface, ytIds, socialContextFollowing) {
-    const id = typeof tweet.rest_id === "string" ? tweet.rest_id : "";
-    if (!id) return null;
-    const text = readTweetBody(tweet);
-    if (!text) return null;
-    const legacy = isRecord(tweet.legacy) ? tweet.legacy : {};
-    const outerAuthor = isRecord(tweet.core) && isRecord(tweet.core.user_results) ? readUserFollowFlag(tweet.core.user_results.result) : { following: false };
-    let innerFollowed = false;
-    if (isRecord(legacy.retweeted_status_result)) {
-      const inner = unwrapTweet(legacy.retweeted_status_result.result);
-      if (inner && isRecord(inner.core) && isRecord(inner.core.user_results)) {
-        innerFollowed = readUserFollowFlag(inner.core.user_results.result).following;
-      }
-    }
-    const isFollowed = outerAuthor.following || innerFollowed || socialContextFollowing;
-    const secondaryText = buildTweetRichContext(tweet);
-    const likes = typeof legacy.favorite_count === "number" ? legacy.favorite_count : void 0;
-    const replies = typeof legacy.reply_count === "number" ? legacy.reply_count : void 0;
-    const quotes = typeof legacy.quote_count === "number" ? legacy.quote_count : void 0;
-    return {
-      platform: "x",
-      id,
-      creatorId: outerAuthor.id,
-      creatorHandle: outerAuthor.handle,
-      isFollowed,
-      surface,
-      titleOrText: text,
-      ...secondaryText ? { secondaryText } : {},
-      ...ytIds.length > 0 ? { linkedYoutubeIds: ytIds } : {},
-      metrics: { likes, replies, quotes }
-    };
-  }
-  async function filterTwitterJson(data, urlPath, config2, decide) {
-    if (!config2.enabled || !config2.x.enabled) return data;
-    if (!isRecord(data)) return data;
-    const isProfilePayload = isRecord(data.data) && isRecord(data.data.user);
-    const isAdsOnlySurface = isProfilePayload || urlPath.includes("/HomeLatestTimeline") || urlPath.includes("/TweetDetail") || urlPath.includes("/UserTweets") || urlPath.includes("/UserMedia") || urlPath.includes("/HighlightsTweets") || urlPath.includes("/Likes");
-    const surface = urlPath.includes("/SearchTimeline") ? "search" : "timeline";
-    const candidates = /* @__PURE__ */ new Map();
-    const entryRefs = [];
-    function extractEntryId(entry) {
-      const rawEntryId = typeof entry.entryId === "string" ? entry.entryId : "";
-      const content = isRecord(entry.content) ? entry.content : isRecord(entry.item) ? entry.item : void 0;
-      const itemContent = content && isRecord(content.itemContent) ? content.itemContent : void 0;
-      if (itemContent && isRecord(itemContent.tweet_results)) {
-        const tweet = unwrapTweet(itemContent.tweet_results.result);
-        if (tweet && typeof tweet.rest_id === "string") return tweet.rest_id;
-      }
-      if (itemContent && typeof itemContent.name === "string") {
-        return rawEntryId || `trend:${itemContent.name}`;
-      }
-      return rawEntryId;
-    }
-    function walkInstructions(node) {
-      if (Array.isArray(node)) {
-        for (const child of node) walkInstructions(child);
-        return;
-      }
-      if (!isRecord(node)) return;
-      if (Array.isArray(node.entries)) {
-        processEntriesArray(node.entries);
-      }
-      if (Array.isArray(node.moduleItems)) {
-        processEntriesArray(node.moduleItems);
-      }
-      for (const val of Object.values(node)) {
-        walkInstructions(val);
-      }
-    }
-    function processEntriesArray(entries) {
-      for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i];
-        if (!isRecord(entry)) continue;
-        const entryId = typeof entry.entryId === "string" ? entry.entryId : "";
-        if (entryId && isNoiseEntryId(entryId)) {
-          entries.splice(i, 1);
-          i--;
-          continue;
-        }
-        const content = isRecord(entry.content) ? entry.content : isRecord(entry.item) ? entry.item : void 0;
-        const itemContent = content && isRecord(content.itemContent) ? content.itemContent : void 0;
-        if (itemContent?.promotedMetadata) {
-          entries.splice(i, 1);
-          i--;
-          continue;
-        }
-        const socialCtx = (itemContent && isRecord(itemContent.socialContext) ? itemContent.socialContext : void 0) ?? (content && isRecord(content.clientEventInfo) ? content.clientEventInfo : void 0);
-        const socialFollowing = isRecord(socialCtx) && typeof socialCtx.contextType === "string" && socialCtx.contextType === "Follow";
-        if (itemContent && isRecord(itemContent.tweet_results)) {
-          const tweet = unwrapTweet(itemContent.tweet_results.result);
-          if (!tweet) continue;
-          const ytIds = extractTweetYouTubeIds(tweet);
-          const item = extractTweetItem(tweet, surface, ytIds, socialFollowing);
-          polishTweetPresentation(tweet, config2, ytIds);
-          if (item && config2.x.caliberFilter && !isAdsOnlySurface) {
-            candidates.set(item.id, item);
-            entryRefs.push({ list: entries, itemId: item.id });
-          }
-          continue;
-        }
-        if (itemContent && typeof itemContent.name === "string" && (itemContent.__typename === "TimelineTrend" || isRecord(itemContent.trendMetadata) || entryId.startsWith("trend-"))) {
-          const trendName = itemContent.name.trim();
-          const trendMeta = isRecord(itemContent.trendMetadata) ? itemContent.trendMetadata : {};
-          const domainCtx = typeof trendMeta.domainContext === "string" ? trendMeta.domainContext : void 0;
-          const metaDesc = typeof trendMeta.metaDescription === "string" ? trendMeta.metaDescription : "";
-          if (/promoted/i.test(metaDesc)) {
-            entries.splice(i, 1);
-            i--;
-            continue;
-          }
-          itemContent.name = calmTitle(trendName);
-          if (config2.x.caliberFilter && !isAdsOnlySurface && trendName) {
-            const trendId = entryId || `trend:${trendName}`;
-            candidates.set(trendId, {
-              platform: "x",
-              id: trendId,
-              surface: "search",
-              titleOrText: trendName,
-              secondaryText: [domainCtx, metaDesc].filter(Boolean).join(" \xB7 ") || void 0
-            });
-            entryRefs.push({ list: entries, itemId: trendId });
-          }
-        }
-      }
-    }
-    walkInstructions(data);
-    if (candidates.size === 0) {
-      return data;
-    }
-    const droppedIds = await decide([...candidates.values()]);
-    if (droppedIds.size === 0) return data;
-    const listsToPrune = /* @__PURE__ */ new Map();
-    for (const ref of entryRefs) {
-      if (ref.itemId && droppedIds.has(ref.itemId)) {
-        let set = listsToPrune.get(ref.list);
-        if (!set) {
-          set = /* @__PURE__ */ new Set();
-          listsToPrune.set(ref.list, set);
-        }
-        set.add(ref.itemId);
-      }
-    }
-    for (const [list, ids] of listsToPrune) {
-      for (let i = list.length - 1; i >= 0; i--) {
-        const entry = list[i];
-        if (!isRecord(entry)) continue;
-        const id = extractEntryId(entry);
-        if (id && ids.has(id)) {
-          list.splice(i, 1);
-        }
-      }
-    }
-    return data;
-  }
-
-  // src/core/dearrow.ts
-  var DEARROW_MIRROR_BASE = "https://dearrow.minibomba.pro/sbserver/api/branding";
-  var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
-  var FETCH_TIMEOUT_MS = 2500;
-  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed)\b|\.\.\.\s*$|\?!|!\?)/i;
-  var titleCache = /* @__PURE__ */ new Map();
-  var fetchedPrefixes = /* @__PURE__ */ new Map();
-  async function sha256Prefix4(input) {
-    const bytes = new TextEncoder().encode(input);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    const view = new Uint8Array(digest);
-    const b0 = view[0]?.toString(16).padStart(2, "0") ?? "00";
-    const b1 = view[1]?.toString(16).padStart(2, "0") ?? "00";
-    return `${b0}${b1}`;
-  }
-  function cleanDeArrowTitle(raw) {
-    return raw.replace(/(^|\s)>(\S)/g, "$1$2").replace(/\s+/g, " ").trim();
-  }
-  function isVagueClickbaitTitle(title) {
-    if (!title) return false;
-    if (VAGUE_TITLE_RE.test(title)) return true;
-    const letters = title.replace(/[^A-Za-z]/g, "");
-    if (letters.length >= 10) {
-      const upper = letters.replace(/[^A-Z]/g, "").length;
-      if (upper / letters.length >= 0.7) return true;
-    }
-    return false;
-  }
-  function getCachedDeArrowTitle(videoId) {
-    return titleCache.get(videoId) ?? void 0;
-  }
-  function clearDeArrowCache() {
-    titleCache.clear();
-    fetchedPrefixes.clear();
-  }
-  function pickBestCommunityTitle(record) {
-    if (!isRecord(record) || !Array.isArray(record.titles)) return null;
-    for (const candidate of record.titles) {
-      if (!isRecord(candidate) || candidate.original === true) continue;
-      const votes = typeof candidate.votes === "number" ? candidate.votes : -1;
-      if (candidate.locked !== true && votes < 0) continue;
-      if (typeof candidate.title !== "string") continue;
-      const cleaned = cleanDeArrowTitle(candidate.title);
-      if (cleaned.length >= 4) return cleaned;
-    }
-    return null;
-  }
-  async function lookupDeArrowTitles(videoIds, fetchImpl = fetch) {
-    const result = /* @__PURE__ */ new Map();
-    const uniqueIds = [...new Set(videoIds.filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id)))];
-    if (uniqueIds.length === 0) return result;
-    const now = Date.now();
-    const prefixesToFetch = /* @__PURE__ */ new Map();
-    for (const vid of uniqueIds) {
-      if (titleCache.has(vid)) {
-        const hit = titleCache.get(vid);
-        if (hit) result.set(vid, hit);
-        continue;
-      }
-      const prefix = await sha256Prefix4(vid);
-      const fetchedAt = fetchedPrefixes.get(prefix);
-      if (fetchedAt && now - fetchedAt < BUCKET_TTL_MS) {
-        titleCache.set(vid, null);
-        continue;
-      }
-      let list = prefixesToFetch.get(prefix);
-      if (!list) {
-        list = [];
-        prefixesToFetch.set(prefix, list);
-      }
-      list.push(vid);
-    }
-    const prefixEntries = [...prefixesToFetch.entries()].slice(0, 6);
-    await Promise.all(
-      prefixEntries.map(async ([prefix, requestedVids]) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-        try {
-          const res = await fetchImpl(`${DEARROW_MIRROR_BASE}/${prefix}`, {
-            signal: controller.signal
-          });
-          if (!res.ok) return;
-          const bucket = await res.json();
-          if (!isRecord(bucket)) return;
-          fetchedPrefixes.set(prefix, now);
-          for (const [vid, rec] of Object.entries(bucket)) {
-            titleCache.set(vid, pickBestCommunityTitle(rec));
-          }
-          for (const reqVid of requestedVids) {
-            if (!titleCache.has(reqVid)) titleCache.set(reqVid, null);
-            const hit = titleCache.get(reqVid);
-            if (hit) result.set(reqVid, hit);
-          }
-        } catch {
-        } finally {
-          clearTimeout(timer);
-        }
-      })
-    );
-    return result;
-  }
-
-  // src/adapters/youtube-json.ts
-  var VIDEO_RENDERER_KEYS = [
-    "videoRenderer",
-    "compactVideoRenderer",
-    "gridVideoRenderer",
-    "videoWithContextRenderer"
-  ];
-  var SHORTS_KEYS = /* @__PURE__ */ new Set([
-    "reelShelfRenderer",
-    "reelItemRenderer",
-    "shortsLockupViewModel"
-  ]);
-  var AD_AND_NOISE_KEYS = /* @__PURE__ */ new Set([
-    "adSlotRenderer",
-    "promotedSparklesWebRenderer",
-    "promotedVideoRenderer",
-    "miniGameCardViewModel",
-    "radioRenderer",
-    "compactRadioRenderer"
-  ]);
-  var PRUNABLE_WRAPPERS = /* @__PURE__ */ new Set([
-    "richItemRenderer",
-    "richShelfRenderer",
-    "richSectionRenderer",
-    "shelfRenderer",
-    "content",
-    "contents",
-    "itemSectionRenderer"
-  ]);
-  function isYouTubeChannelPayload(data) {
-    if (!isRecord(data)) return false;
-    if (isRecord(data.metadata) && isRecord(data.metadata.channelMetadataRenderer)) return true;
-    if (isRecord(data.header) && (isRecord(data.header.pageHeaderRenderer) || isRecord(data.header.c4TabbedHeaderRenderer))) {
-      return true;
-    }
-    return false;
-  }
-  function surfaceFromEndpoint(urlPath) {
-    if (urlPath.includes("/search") || urlPath.includes("/results")) return "search";
-    if (urlPath.includes("/next")) return "watch_next";
-    return "home";
-  }
-  function readText(node) {
-    if (!isRecord(node)) return "";
-    if (typeof node.simpleText === "string") return node.simpleText;
-    if (typeof node.content === "string") return node.content;
-    if (Array.isArray(node.runs)) {
-      return node.runs.map((run) => isRecord(run) && typeof run.text === "string" ? run.text : "").join("");
-    }
-    return "";
-  }
-  function rewriteText(node, transform) {
-    if (!isRecord(node)) return;
-    if (typeof node.simpleText === "string") {
-      node.simpleText = transform(node.simpleText);
-    } else if (typeof node.content === "string") {
-      node.content = transform(node.content);
-    } else if (Array.isArray(node.runs) && node.runs.length === 1 && isRecord(node.runs[0])) {
-      const single = node.runs[0];
-      if (typeof single.text === "string") {
-        single.text = transform(single.text);
-      }
-    } else if (Array.isArray(node.runs) && node.runs.length > 1) {
-      const full = readText(node);
-      if (full) {
-        node.runs = [{ text: transform(full) }];
-      }
-    }
-  }
-  function parseDurationSec(raw) {
-    if (!raw) return void 0;
-    const clean = raw.trim();
-    if (!/^\d+(?::\d{1,2}){1,2}$/.test(clean)) return void 0;
-    const parts = clean.split(":").map((n) => Number.parseInt(n, 10));
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    return void 0;
-  }
-  function containsShortsUrl(obj) {
-    if (typeof obj === "string") return obj.startsWith("/shorts/");
-    if (Array.isArray(obj)) return obj.some(containsShortsUrl);
-    if (isRecord(obj)) {
-      for (const [k, v] of Object.entries(obj)) {
-        if (SHORTS_KEYS.has(k)) return true;
-        if ((k === "url" || k === "canonicalBaseUrl") && typeof v === "string" && v.startsWith("/shorts")) {
-          return true;
-        }
-        if (containsShortsUrl(v)) return true;
-      }
-    }
-    return false;
-  }
-  function isMixLockup(lockup) {
-    const raw = JSON.stringify(lockup.contentImage ?? {});
-    return raw.includes('"imageName":"MIX"');
-  }
-  function extractFromVideoRenderer(renderer, surface) {
-    const id = typeof renderer.videoId === "string" ? renderer.videoId : "";
-    if (!id) return null;
-    const title = readText(renderer.title) || readText(renderer.headline);
-    if (!title) return null;
-    const byline = renderer.shortBylineText ?? renderer.longBylineText ?? renderer.ownerText;
-    const channelName = readText(byline);
-    let channelId;
-    if (isRecord(byline) && Array.isArray(byline.runs)) {
-      for (const run of byline.runs) {
-        if (!isRecord(run) || !isRecord(run.navigationEndpoint)) continue;
-        const browse = run.navigationEndpoint.browseEndpoint;
-        if (isRecord(browse)) {
-          if (typeof browse.browseId === "string") channelId = browse.browseId;
-          if (!channelId && typeof browse.canonicalBaseUrl === "string") {
-            channelId = browse.canonicalBaseUrl.replace(/^\//, "");
-          }
-        }
-      }
-    }
-    const lengthNode = renderer.lengthText;
-    const durationSec = parseDurationSec(readText(lengthNode));
-    return {
-      platform: "youtube",
-      id,
-      creatorId: channelId,
-      creatorHandle: channelName || void 0,
-      surface,
-      titleOrText: title,
-      durationSec
-    };
-  }
-  function findBrowseEndpoint(node) {
-    if (!isRecord(node)) return {};
-    if (isRecord(node.browseEndpoint)) {
-      const be = node.browseEndpoint;
-      const browseId = typeof be.browseId === "string" ? be.browseId : void 0;
-      const base = typeof be.canonicalBaseUrl === "string" ? be.canonicalBaseUrl : "";
-      const handle = base.startsWith("/@") ? base.slice(1) : void 0;
-      if (browseId || handle) return { browseId, handle };
-    }
-    for (const val of Object.values(node)) {
-      if (isRecord(val) || Array.isArray(val)) {
-        const hit = findBrowseEndpoint(val);
-        if (hit.browseId || hit.handle) return hit;
-      }
-    }
-    return {};
-  }
-  function findLockupDurationSec(contentImage) {
-    if (!isRecord(contentImage)) return void 0;
-    const tvm = contentImage.thumbnailViewModel;
-    if (!isRecord(tvm) || !Array.isArray(tvm.overlays)) return void 0;
-    for (const ov of tvm.overlays) {
-      if (!isRecord(ov) || !isRecord(ov.thumbnailOverlayBadgeViewModel)) continue;
-      const badges = ov.thumbnailOverlayBadgeViewModel.thumbnailBadges;
-      if (!Array.isArray(badges)) continue;
-      for (const b of badges) {
-        if (isRecord(b) && isRecord(b.thumbnailBadgeViewModel) && typeof b.thumbnailBadgeViewModel.text === "string") {
-          const parsed = parseDurationSec(b.thumbnailBadgeViewModel.text);
-          if (parsed !== void 0) return parsed;
-        }
-      }
-    }
-    return void 0;
-  }
-  function extractFromLockup(lockup, surface) {
-    const id = typeof lockup.contentId === "string" ? lockup.contentId : "";
-    if (!id || id.length !== 11) return null;
-    const meta = isRecord(lockup.metadata) ? lockup.metadata.lockupMetadataViewModel : void 0;
-    if (!isRecord(meta)) return null;
-    const title = readText(meta.title);
-    if (!title) return null;
-    const { browseId, handle } = findBrowseEndpoint(meta.image ?? meta.metadata);
-    let channelDisplayName = "";
-    const contextParts = [];
-    const contentMeta = isRecord(meta.metadata) ? meta.metadata.contentMetadataViewModel : void 0;
-    if (isRecord(contentMeta) && Array.isArray(contentMeta.metadataRows)) {
-      contentMeta.metadataRows.forEach((row, rowIdx) => {
-        if (!isRecord(row) || !Array.isArray(row.metadataParts)) return;
-        for (const part of row.metadataParts) {
-          if (!isRecord(part)) continue;
-          const txt = readText(part.text).trim();
-          if (!txt) continue;
-          if (rowIdx === 0 && !channelDisplayName) channelDisplayName = txt;
-          contextParts.push(txt);
-        }
-      });
-    }
-    const durationSec = findLockupDurationSec(lockup.contentImage);
-    return {
-      platform: "youtube",
-      id,
-      creatorId: browseId || (channelDisplayName ? channelDisplayName : void 0),
-      creatorHandle: handle || channelDisplayName || void 0,
-      surface,
-      titleOrText: title,
-      ...contextParts.length > 0 ? { secondaryText: contextParts.join(" \xB7 ") } : {},
-      ...durationSec !== void 0 ? { durationSec } : {}
-    };
-  }
-  function resolveBetterYouTubeTitle(rawTitle, id, config2) {
-    if (config2.youtube.dearrowTitles && id && isVagueClickbaitTitle(rawTitle)) {
-      const curated = getCachedDeArrowTitle(id);
-      if (curated) return config2.youtube.calmTitles ? calmTitle(curated) : curated;
-    }
-    return config2.youtube.calmTitles ? calmTitle(rawTitle) : rawTitle;
-  }
-  function dehypeVideoRenderer(renderer, config2) {
-    const id = typeof renderer.videoId === "string" ? renderer.videoId : void 0;
-    if (config2.youtube.calmTitles || config2.youtube.dearrowTitles) {
-      if (renderer.title) rewriteText(renderer.title, (t) => resolveBetterYouTubeTitle(t, id, config2));
-      if (renderer.headline) rewriteText(renderer.headline, (t) => resolveBetterYouTubeTitle(t, id, config2));
-    }
-    if (config2.youtube.midFrameThumbs && isRecord(renderer.thumbnail) && Array.isArray(renderer.thumbnail.thumbnails)) {
-      for (const thumb of renderer.thumbnail.thumbnails) {
-        if (isRecord(thumb) && typeof thumb.url === "string") {
-          thumb.url = midFrameThumbUrl(thumb.url, id);
-        }
-      }
-    }
-  }
-  function dehypeLockup(lockup, config2) {
-    const id = typeof lockup.contentId === "string" ? lockup.contentId : void 0;
-    if ((config2.youtube.calmTitles || config2.youtube.dearrowTitles) && isRecord(lockup.metadata)) {
-      const meta = lockup.metadata.lockupMetadataViewModel;
-      if (isRecord(meta) && meta.title) {
-        rewriteText(meta.title, (t) => resolveBetterYouTubeTitle(t, id, config2));
-      }
-    }
-    if (config2.youtube.midFrameThumbs && isRecord(lockup.contentImage)) {
-      const tvm = lockup.contentImage.thumbnailViewModel;
-      if (isRecord(tvm) && isRecord(tvm.image) && Array.isArray(tvm.image.sources)) {
-        for (const src of tvm.image.sources) {
-          if (isRecord(src) && typeof src.url === "string") {
-            src.url = midFrameThumbUrl(src.url, id);
-          }
-        }
-      }
-    }
-  }
-  async function filterYouTubeJson(data, urlPath, pageUrl, config2, decide) {
-    if (!config2.enabled || !config2.youtube.enabled) return data;
-    if (!isRecord(data) && !Array.isArray(data)) return data;
-    const surface = surfaceFromEndpoint(urlPath);
-    const safeRoute = isYouTubeSafeRoute(pageUrl) || isYouTubeChannelPayload(data);
-    const candidates = /* @__PURE__ */ new Map();
-    function collectAndStripNoise(node) {
-      if (Array.isArray(node)) {
-        let removedAny = false;
-        for (let i = 0; i < node.length; i++) {
-          if (collectAndStripNoise(node[i])) {
-            node.splice(i, 1);
-            i--;
-            removedAny = true;
-          }
-        }
-        return removedAny && node.length === 0;
-      }
-      if (!isRecord(node)) return false;
-      for (const key of Object.keys(node)) {
-        if (AD_AND_NOISE_KEYS.has(key)) {
-          delete node[key];
-          return Object.keys(node).length === 0;
-        }
-        if (config2.youtube.hideShorts && SHORTS_KEYS.has(key)) {
-          delete node[key];
-          return Object.keys(node).length === 0;
-        }
-        if (config2.youtube.hideShorts && key === "gridShelfViewModel" && containsShortsUrl(node[key])) {
-          delete node[key];
-          return Object.keys(node).length === 0;
-        }
-      }
-      if (isRecord(node.lockupViewModel)) {
-        if (isMixLockup(node.lockupViewModel)) {
-          delete node.lockupViewModel;
-          return Object.keys(node).length === 0;
-        }
-        if (config2.youtube.hideShorts && containsShortsUrl(node.lockupViewModel)) {
-          delete node.lockupViewModel;
-          return Object.keys(node).length === 0;
-        }
-        const item = extractFromLockup(node.lockupViewModel, surface);
-        if (item && !safeRoute && config2.youtube.caliberFilter) {
-          candidates.set(item.id, item);
-        }
-      }
-      for (const key of VIDEO_RENDERER_KEYS) {
-        const renderer = node[key];
-        if (!isRecord(renderer)) continue;
-        if (config2.youtube.hideShorts && containsShortsUrl(renderer.navigationEndpoint)) {
-          delete node[key];
-          return Object.keys(node).length === 0;
-        }
-        const item = extractFromVideoRenderer(renderer, surface);
-        if (item && !safeRoute && config2.youtube.caliberFilter) {
-          candidates.set(item.id, item);
-        }
-      }
-      let lostPrimaryContent = false;
-      for (const key of Object.keys(node)) {
-        const childBecameEmpty = collectAndStripNoise(node[key]);
-        if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
-          delete node[key];
-          if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
-            lostPrimaryContent = true;
-          }
-        }
-      }
-      return lostPrimaryContent || Object.keys(node).length === 0;
-    }
-    collectAndStripNoise(data);
-    const droppedIds = candidates.size > 0 ? await decide([...candidates.values()]) : /* @__PURE__ */ new Set();
-    function applyVerdictsAndDehype(node) {
-      if (Array.isArray(node)) {
-        let removedAny = false;
-        for (let i = node.length - 1; i >= 0; i--) {
-          if (applyVerdictsAndDehype(node[i])) {
-            node.splice(i, 1);
-            removedAny = true;
-          }
-        }
-        return removedAny && node.length === 0;
-      }
-      if (!isRecord(node)) return false;
-      if (isRecord(node.lockupViewModel)) {
-        const id = typeof node.lockupViewModel.contentId === "string" ? node.lockupViewModel.contentId : "";
-        if (id && droppedIds.has(id)) {
-          delete node.lockupViewModel;
-          return Object.keys(node).length === 0;
-        }
-        dehypeLockup(node.lockupViewModel, config2);
-      }
-      for (const key of VIDEO_RENDERER_KEYS) {
-        const renderer = node[key];
-        if (!isRecord(renderer)) continue;
-        const id = typeof renderer.videoId === "string" ? renderer.videoId : "";
-        if (id && droppedIds.has(id)) {
-          delete node[key];
-          return Object.keys(node).length === 0;
-        }
-        dehypeVideoRenderer(renderer, config2);
-      }
-      let lostPrimaryContent = false;
-      for (const key of Object.keys(node)) {
-        const childBecameEmpty = applyVerdictsAndDehype(node[key]);
-        if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
-          delete node[key];
-          if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
-            lostPrimaryContent = true;
-          }
-        }
-      }
-      return lostPrimaryContent || Object.keys(node).length === 0;
-    }
-    applyVerdictsAndDehype(data);
-    return data;
-  }
-  function findBalancedJsonEnd(source, openBraceIndex) {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let i = openBraceIndex; i < source.length; i++) {
-      const ch = source[i];
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (ch === "\\") {
-          escaped = true;
-        } else if (ch === '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (ch === '"') {
-        inString = true;
-      } else if (ch === "{") {
-        depth++;
-      } else if (ch === "}") {
-        depth--;
-        if (depth === 0) return i;
-      }
-    }
-    return -1;
-  }
-  async function rewriteYouTubeHtmlInitialData(html, pageUrl, config2, decide) {
-    if (!config2.enabled || !config2.youtube.enabled) return html;
-    const markerMatch = /(?:var\s+ytInitialData|window\["ytInitialData"\])\s*=\s*\{/.exec(html);
-    if (!markerMatch) return html;
-    const openBrace = markerMatch.index + markerMatch[0].length - 1;
-    const closeBrace = findBalancedJsonEnd(html, openBrace);
-    if (closeBrace === -1) return html;
-    try {
-      const parsed = JSON.parse(html.slice(openBrace, closeBrace + 1));
-      const filtered = await filterYouTubeJson(parsed, "/youtubei/v1/browse", pageUrl, config2, decide);
-      const safeSerialized = JSON.stringify(filtered).replace(/<\//g, "<\\/");
-      return html.slice(0, openBrace) + safeSerialized + html.slice(closeBrace + 1);
-    } catch {
-      return html;
-    }
   }
 
   // src/background/memory.ts
@@ -2304,55 +1294,979 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
     };
   }
 
-  // src/background/index.ts
-  var config = structuredClone(DEFAULT_CONFIG);
-  var sessionFilteredCount = 0;
-  var seeds = {
-    hnVideos: /* @__PURE__ */ new Set(),
-    hnChannels: /* @__PURE__ */ new Set(),
-    slopChannels: /* @__PURE__ */ new Set()
-  };
-  var memory = createMemoryStore();
-  var novelty = createNoveltyMemory();
-  async function loadSeedSet(assetPath, target) {
-    try {
-      const res = await fetch(browser.runtime.getURL(assetPath));
-      if (!res.ok) return;
-      const text = await res.text();
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed) target.add(trimmed);
+  // src/adapters/instagram-json.ts
+  function isMediaAd(media, wrapper) {
+    if (media.ad_id || media.is_ad === true || media.is_organic_product_tagging_eligible === false && media.ad_action) {
+      return true;
+    }
+    if (isRecord(media.injected) || typeof media.ad_action === "string") return true;
+    if (wrapper && (isRecord(wrapper.ad) || isRecord(wrapper.explore_story) || isRecord(wrapper.suggested_users))) {
+      return true;
+    }
+    return false;
+  }
+  function extractIgMedia(media, surface) {
+    const rawId = media.pk ?? media.id ?? media.code;
+    const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
+    if (!id) return null;
+    let captionText = "";
+    if (isRecord(media.caption) && typeof media.caption.text === "string") {
+      captionText = media.caption.text;
+      media.caption.text = calmTitle(captionText);
+    } else if (isRecord(media.edge_media_to_caption) && Array.isArray(media.edge_media_to_caption.edges) && isRecord(media.edge_media_to_caption.edges[0]) && isRecord(media.edge_media_to_caption.edges[0].node) && typeof media.edge_media_to_caption.edges[0].node.text === "string") {
+      captionText = media.edge_media_to_caption.edges[0].node.text;
+      media.edge_media_to_caption.edges[0].node.text = calmTitle(captionText);
+    }
+    let creatorId;
+    let creatorHandle;
+    let isFollowed = false;
+    if (isRecord(media.user)) {
+      if (media.user.pk != null) creatorId = String(media.user.pk);
+      if (typeof media.user.username === "string") creatorHandle = media.user.username;
+      if (isRecord(media.user.friendship_status) && media.user.friendship_status.following === true) {
+        isFollowed = true;
       }
-    } catch {
     }
+    let secondaryText;
+    if (isRecord(media.clips_metadata) && isRecord(media.clips_metadata.music_info) && isRecord(media.clips_metadata.music_info.music_asset_info) && typeof media.clips_metadata.music_info.music_asset_info.title === "string") {
+      secondaryText = `audio: ${media.clips_metadata.music_info.music_asset_info.title}`;
+    }
+    const durationSec = typeof media.video_duration === "number" ? media.video_duration : void 0;
+    const likes = typeof media.like_count === "number" ? media.like_count : void 0;
+    const replies = typeof media.comment_count === "number" ? media.comment_count : void 0;
+    return {
+      platform: "instagram",
+      id,
+      creatorId,
+      creatorHandle,
+      isFollowed,
+      surface,
+      titleOrText: captionText || `@${creatorHandle ?? "reel"}`,
+      secondaryText,
+      durationSec,
+      metrics: { likes, replies }
+    };
   }
-  async function initConfigAndSeeds() {
+  function isInstagramProfileOrPermalink(pageUrl) {
+    if (!pageUrl) return false;
     try {
-      const stored = await browser.storage.local.get("sieveConfig");
-      config = mergeConfig(stored.sieveConfig);
+      const p = new URL(pageUrl).pathname.replace(/\/+$/, "") || "/";
+      if (p === "/" || p === "/reels" || p.startsWith("/reels/")) return false;
+      return true;
     } catch {
-      config = structuredClone(DEFAULT_CONFIG);
+      return false;
     }
-    await Promise.all([
-      loadSeedSet("assets/seeds/hn-videos.txt", seeds.hnVideos),
-      loadSeedSet("assets/seeds/hn-channels.txt", seeds.hnChannels),
-      loadSeedSet("assets/seeds/slop-channels.txt", seeds.slopChannels)
-    ]);
   }
-  browser.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.sieveConfig) {
-      config = mergeConfig(changes.sieveConfig.newValue);
+  async function filterInstagramJson(data, urlPath, config2, decide, pageUrl) {
+    if (!config2.enabled || !config2.instagram.enabled) return data;
+    if (!isRecord(data)) return data;
+    const onProfileOrPost = isInstagramProfileOrPermalink(pageUrl);
+    const candidates = /* @__PURE__ */ new Map();
+    const slots = [];
+    function processGraphqlConnection(connKey, conn) {
+      if (!Array.isArray(conn.edges)) return;
+      const isUserProfileConn = onProfileOrPost || connKey.includes("user") || !connKey.includes("clips__home") && !connKey.includes("feed__timeline");
+      const isReels = connKey.includes("clips");
+      const surface = isReels ? "reels" : "timeline";
+      const filterActive = !isUserProfileConn && (isReels ? config2.instagram.filterReels : config2.instagram.caliberFilter);
+      const edges = conn.edges;
+      const getMediaFromEdge = (edge) => {
+        if (!isRecord(edge) || !isRecord(edge.node)) return null;
+        if (isRecord(edge.node.media)) return edge.node.media;
+        if (isRecord(edge.node.media_or_ad)) return edge.node.media_or_ad;
+        if (edge.node.pk != null || edge.node.id != null) return edge.node;
+        return null;
+      };
+      for (let i = 0; i < edges.length; i++) {
+        const edge = edges[i];
+        const node = isRecord(edge) && isRecord(edge.node) ? edge.node : void 0;
+        const media = getMediaFromEdge(edge);
+        if (!media) continue;
+        if (isMediaAd(media, node)) {
+          edges.splice(i, 1);
+          i--;
+          continue;
+        }
+        const item = extractIgMedia(media, surface);
+        if (!filterActive || !item) continue;
+        candidates.set(item.id, item);
+        slots.push({
+          list: edges,
+          getMediaId: (el) => {
+            const m = getMediaFromEdge(el);
+            const raw = m?.pk ?? m?.id ?? m?.code;
+            return raw != null ? String(raw) : "";
+          }
+        });
+      }
     }
-  });
-  var decideBatch = async (items) => {
-    const dropped = await runSieveOnBatch(items, config, seeds, memory, fetch, novelty);
-    sessionFilteredCount += dropped.size;
-    return dropped;
-  };
+    if (isRecord(data.data)) {
+      for (const [key, val] of Object.entries(data.data)) {
+        if (isRecord(val) && Array.isArray(val.edges)) {
+          processGraphqlConnection(key, val);
+        }
+      }
+    }
+    if (Array.isArray(data.items) && urlPath.includes("/clips/")) {
+      const items = data.items;
+      for (let i = items.length - 1; i >= 0; i--) {
+        const entry = items[i];
+        const media = isRecord(entry) && isRecord(entry.media) ? entry.media : isRecord(entry) ? entry : null;
+        if (!media) continue;
+        if (isMediaAd(media, isRecord(entry) ? entry : void 0)) {
+          items.splice(i, 1);
+          continue;
+        }
+        if (!config2.instagram.filterReels) continue;
+        const item = extractIgMedia(media, "reels");
+        if (item) {
+          candidates.set(item.id, item);
+          slots.push({
+            list: items,
+            getMediaId: (el) => {
+              const m = isRecord(el) && isRecord(el.media) ? el.media : isRecord(el) ? el : null;
+              const raw = m?.pk ?? m?.id ?? m?.code;
+              return raw != null ? String(raw) : "";
+            }
+          });
+        }
+      }
+    }
+    if (Array.isArray(data.feed_items)) {
+      const feedItems = data.feed_items;
+      for (let i = feedItems.length - 1; i >= 0; i--) {
+        const entry = feedItems[i];
+        if (!isRecord(entry)) continue;
+        if (config2.instagram.hideClutter && (entry.suggested_users || entry.explore_story || entry.clips_netego)) {
+          feedItems.splice(i, 1);
+          continue;
+        }
+        const media = isRecord(entry.media_or_ad) ? entry.media_or_ad : null;
+        if (!media) continue;
+        if (isMediaAd(media, entry)) {
+          feedItems.splice(i, 1);
+          continue;
+        }
+        if (!config2.instagram.caliberFilter) continue;
+        const item = extractIgMedia(media, "timeline");
+        if (item) {
+          candidates.set(item.id, item);
+          slots.push({
+            list: feedItems,
+            getMediaId: (el) => {
+              const m = isRecord(el) && isRecord(el.media_or_ad) ? el.media_or_ad : null;
+              const raw = m?.pk ?? m?.id ?? m?.code;
+              return raw != null ? String(raw) : "";
+            }
+          });
+        }
+      }
+    }
+    if (candidates.size === 0) return data;
+    const droppedIds = await decide([...candidates.values()]);
+    if (droppedIds.size === 0) return data;
+    const processedLists = /* @__PURE__ */ new Set();
+    for (const slot of slots) {
+      if (processedLists.has(slot.list)) continue;
+      processedLists.add(slot.list);
+      for (let i = slot.list.length - 1; i >= 0; i--) {
+        const id = slot.getMediaId(slot.list[i]);
+        if (id && droppedIds.has(id)) {
+          slot.list.splice(i, 1);
+        }
+      }
+    }
+    return data;
+  }
+
+  // src/adapters/tiktok-json.ts
+  function isTikTokProfileOrDirectRoute(urlPath, pageUrl) {
+    if (urlPath.includes("/api/post/item_list")) return true;
+    if (!pageUrl) return false;
+    try {
+      const pathname = new URL(pageUrl).pathname;
+      return /(?:^|\/)@[^/]+/.test(pathname);
+    } catch {
+      return false;
+    }
+  }
+  async function filterTikTokJson(data, config2, decide, urlPath = "", pageUrl = "") {
+    if (!config2.enabled || !config2.tiktok.enabled) return data;
+    if (!isRecord(data) || !Array.isArray(data.itemList)) return data;
+    const isProfileSurface = isTikTokProfileOrDirectRoute(urlPath, pageUrl);
+    if (config2.tiktok.postOnlyMode && !isProfileSurface) {
+      data.itemList = [];
+      return data;
+    }
+    const list = data.itemList;
+    const candidates = /* @__PURE__ */ new Map();
+    for (let i = 0; i < list.length; i++) {
+      const raw = list[i];
+      if (!isRecord(raw)) continue;
+      if (raw.isAd === true || isRecord(raw.adInfo)) {
+        list.splice(i, 1);
+        i--;
+        continue;
+      }
+      const desc = typeof raw.desc === "string" ? raw.desc : "";
+      if (typeof raw.desc === "string") {
+        raw.desc = calmTitle(raw.desc);
+      }
+      if (!config2.tiktok.caliberFilter || isProfileSurface) continue;
+      const id = typeof raw.id === "string" ? raw.id : "";
+      if (!id) continue;
+      const author = isRecord(raw.author) ? raw.author : {};
+      const stats = isRecord(raw.stats) ? raw.stats : {};
+      const video = isRecord(raw.video) ? raw.video : {};
+      const followStatus = typeof author.followStatus === "number" ? author.followStatus : 0;
+      candidates.set(id, {
+        platform: "tiktok",
+        id,
+        creatorId: typeof author.id === "string" ? author.id : void 0,
+        creatorHandle: typeof author.uniqueId === "string" ? author.uniqueId : void 0,
+        isFollowed: followStatus === 1 || followStatus === 2,
+        surface: "reels",
+        titleOrText: desc || `@${typeof author.uniqueId === "string" ? author.uniqueId : "tiktok"}`,
+        durationSec: typeof video.duration === "number" ? video.duration : void 0,
+        metrics: {
+          likes: typeof stats.diggCount === "number" ? stats.diggCount : void 0,
+          replies: typeof stats.commentCount === "number" ? stats.commentCount : void 0
+        }
+      });
+    }
+    if (candidates.size === 0) return data;
+    const droppedIds = await decide([...candidates.values()]);
+    if (droppedIds.size === 0) return data;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i];
+      if (isRecord(entry) && typeof entry.id === "string" && droppedIds.has(entry.id)) {
+        list.splice(i, 1);
+      }
+    }
+    return data;
+  }
+
+  // src/adapters/twitter-json.ts
+  var NOISE_ENTRY_PREFIXES = [
+    "promoted-",
+    "who-to-follow-",
+    "upsell-",
+    "RelevancePrompt-",
+    "inline-prompt-"
+  ];
+  function isNoiseEntryId(entryId) {
+    return NOISE_ENTRY_PREFIXES.some((prefix) => entryId.startsWith(prefix));
+  }
+  function unwrapTweet(rawResult) {
+    if (!isRecord(rawResult)) return null;
+    if (rawResult.__typename === "TweetWithVisibilityResults" && isRecord(rawResult.tweet)) {
+      return rawResult.tweet;
+    }
+    if (typeof rawResult.rest_id === "string" || isRecord(rawResult.legacy)) {
+      return rawResult;
+    }
+    return null;
+  }
+  function readTweetBody(tweet) {
+    if (isRecord(tweet.note_tweet) && isRecord(tweet.note_tweet.note_tweet_results) && isRecord(tweet.note_tweet.note_tweet_results.result) && typeof tweet.note_tweet.note_tweet_results.result.text === "string") {
+      return tweet.note_tweet.note_tweet_results.result.text;
+    }
+    if (isRecord(tweet.legacy) && typeof tweet.legacy.full_text === "string") {
+      return tweet.legacy.full_text;
+    }
+    return "";
+  }
+  function extractTweetYouTubeIds(tweet) {
+    const urls = [];
+    if (isRecord(tweet.legacy)) {
+      if (typeof tweet.legacy.full_text === "string") urls.push(tweet.legacy.full_text);
+      if (isRecord(tweet.legacy.entities) && Array.isArray(tweet.legacy.entities.urls)) {
+        for (const u of tweet.legacy.entities.urls) {
+          if (isRecord(u) && typeof u.expanded_url === "string") {
+            urls.push(u.expanded_url);
+          }
+        }
+      }
+    }
+    if (isRecord(tweet.card) && isRecord(tweet.card.legacy) && Array.isArray(tweet.card.legacy.binding_values)) {
+      for (const b of tweet.card.legacy.binding_values) {
+        if (isRecord(b) && isRecord(b.value) && typeof b.value.string_value === "string") {
+          urls.push(b.value.string_value);
+        }
+      }
+    }
+    if (isRecord(tweet.quoted_status_result)) {
+      const quoted = unwrapTweet(tweet.quoted_status_result.result);
+      if (quoted) urls.push(...extractTweetYouTubeIds(quoted));
+    }
+    return extractYouTubeIdsFromText(urls.join(" "));
+  }
+  function buildTweetRichContext(tweet) {
+    const parts = [];
+    const legacy = isRecord(tweet.legacy) ? tweet.legacy : {};
+    const mediaHolder = isRecord(legacy.extended_entities) ? legacy.extended_entities : isRecord(legacy.entities) ? legacy.entities : void 0;
+    if (mediaHolder && Array.isArray(mediaHolder.media) && mediaHolder.media.length > 0) {
+      const types = /* @__PURE__ */ new Set();
+      for (const m of mediaHolder.media) {
+        if (isRecord(m) && typeof m.type === "string") {
+          types.add(m.type === "animated_gif" ? "gif" : m.type);
+        }
+      }
+      if (types.size > 0) parts.push(`[${[...types].join("+")}]`);
+    }
+    if (isRecord(legacy.entities) && Array.isArray(legacy.entities.urls)) {
+      for (const u of legacy.entities.urls) {
+        if (isRecord(u) && typeof u.expanded_url === "string") {
+          parts.push(`link: ${u.expanded_url.slice(0, 90)}`);
+        }
+      }
+    }
+    if (isRecord(tweet.card) && isRecord(tweet.card.legacy) && Array.isArray(tweet.card.legacy.binding_values)) {
+      let cardTitle = "";
+      let cardDomain = "";
+      for (const b of tweet.card.legacy.binding_values) {
+        if (!isRecord(b) || typeof b.key !== "string" || !isRecord(b.value)) continue;
+        if (b.key === "title" && typeof b.value.string_value === "string") {
+          cardTitle = b.value.string_value.trim();
+        } else if (b.key === "vanity_url" && typeof b.value.string_value === "string") {
+          cardDomain = b.value.string_value.trim();
+        }
+      }
+      if (cardTitle) {
+        parts.push(`card: ${cardDomain ? `${cardDomain} - ` : ""}${cardTitle}`);
+      }
+    }
+    if (isRecord(tweet.quoted_status_result)) {
+      const quoted = unwrapTweet(tweet.quoted_status_result.result);
+      if (quoted) {
+        const qBody = readTweetBody(quoted).trim();
+        let qAuthor = "";
+        if (isRecord(quoted.core) && isRecord(quoted.core.user_results) && isRecord(quoted.core.user_results.result) && isRecord(quoted.core.user_results.result.legacy) && typeof quoted.core.user_results.result.legacy.screen_name === "string") {
+          qAuthor = `@${quoted.core.user_results.result.legacy.screen_name}`;
+        }
+        if (qBody) {
+          parts.push(`quoting ${qAuthor || "post"}: ${qBody.slice(0, 140)}`);
+        }
+      }
+    }
+    return parts.length > 0 ? parts.join(" | ") : void 0;
+  }
+  function polishTweetPresentation(tweet, config2, ytIds) {
+    if (isRecord(tweet.legacy) && typeof tweet.legacy.full_text === "string") {
+      tweet.legacy.full_text = calmTitle(tweet.legacy.full_text);
+    }
+    if (isRecord(tweet.note_tweet) && isRecord(tweet.note_tweet.note_tweet_results) && isRecord(tweet.note_tweet.note_tweet_results.result) && typeof tweet.note_tweet.note_tweet_results.result.text === "string") {
+      tweet.note_tweet.note_tweet_results.result.text = calmTitle(
+        tweet.note_tweet.note_tweet_results.result.text
+      );
+    }
+    if (isRecord(tweet.quoted_status_result)) {
+      const quoted = unwrapTweet(tweet.quoted_status_result.result);
+      if (quoted) {
+        polishTweetPresentation(quoted, config2, extractTweetYouTubeIds(quoted));
+      }
+    }
+    if (!isRecord(tweet.card) || !isRecord(tweet.card.legacy)) return;
+    const bindings = tweet.card.legacy.binding_values;
+    if (!Array.isArray(bindings)) return;
+    const fallbackYtId = ytIds[0];
+    let titleVal;
+    let vanityEntry;
+    for (const b of bindings) {
+      if (!isRecord(b) || typeof b.key !== "string" || !isRecord(b.value)) continue;
+      if (b.key === "title" && typeof b.value.string_value === "string") {
+        const calmed = calmTitle(b.value.string_value.trim());
+        b.value.string_value = calmed;
+        titleVal = calmed;
+      } else if (b.key === "vanity_url" && typeof b.value.string_value === "string") {
+        vanityEntry = b.value;
+      }
+      if (isRecord(b.value.image_value) && typeof b.value.image_value.url === "string") {
+        const imgUrl = b.value.image_value.url;
+        if (imgUrl.includes("ytimg.com/vi")) {
+          b.value.image_value.url = midFrameThumbUrl(imgUrl, fallbackYtId);
+        }
+      }
+    }
+    if (config2.x.restoreHeadlines && titleVal && vanityEntry && typeof vanityEntry.string_value === "string") {
+      if (!vanityEntry.string_value.includes(" \xB7 ")) {
+        vanityEntry.string_value = `${vanityEntry.string_value} \xB7 ${titleVal}`;
+      }
+    }
+  }
+  function readUserFollowFlag(userContainer) {
+    if (!isRecord(userContainer)) return { following: false };
+    const id = typeof userContainer.rest_id === "string" ? userContainer.rest_id : void 0;
+    let handle2;
+    let following = false;
+    if (isRecord(userContainer.legacy)) {
+      if (typeof userContainer.legacy.screen_name === "string") {
+        handle2 = userContainer.legacy.screen_name;
+      }
+      if (userContainer.legacy.following === true) following = true;
+    }
+    if (isRecord(userContainer.relationship_perspectives) && userContainer.relationship_perspectives.following === true) {
+      following = true;
+    }
+    return { id, handle: handle2, following };
+  }
+  function extractTweetItem(tweet, surface, ytIds, socialContextFollowing) {
+    const id = typeof tweet.rest_id === "string" ? tweet.rest_id : "";
+    if (!id) return null;
+    const text = readTweetBody(tweet);
+    if (!text) return null;
+    const legacy = isRecord(tweet.legacy) ? tweet.legacy : {};
+    const outerAuthor = isRecord(tweet.core) && isRecord(tweet.core.user_results) ? readUserFollowFlag(tweet.core.user_results.result) : { following: false };
+    let innerFollowed = false;
+    if (isRecord(legacy.retweeted_status_result)) {
+      const inner = unwrapTweet(legacy.retweeted_status_result.result);
+      if (inner && isRecord(inner.core) && isRecord(inner.core.user_results)) {
+        innerFollowed = readUserFollowFlag(inner.core.user_results.result).following;
+      }
+    }
+    const isFollowed = outerAuthor.following || innerFollowed || socialContextFollowing;
+    const secondaryText = buildTweetRichContext(tweet);
+    const likes = typeof legacy.favorite_count === "number" ? legacy.favorite_count : void 0;
+    const replies = typeof legacy.reply_count === "number" ? legacy.reply_count : void 0;
+    const quotes = typeof legacy.quote_count === "number" ? legacy.quote_count : void 0;
+    return {
+      platform: "x",
+      id,
+      creatorId: outerAuthor.id,
+      creatorHandle: outerAuthor.handle,
+      isFollowed,
+      surface,
+      titleOrText: text,
+      ...secondaryText ? { secondaryText } : {},
+      ...ytIds.length > 0 ? { linkedYoutubeIds: ytIds } : {},
+      metrics: { likes, replies, quotes }
+    };
+  }
+  async function filterTwitterJson(data, urlPath, config2, decide) {
+    if (!config2.enabled || !config2.x.enabled) return data;
+    if (!isRecord(data)) return data;
+    const isProfilePayload = isRecord(data.data) && isRecord(data.data.user);
+    const isAdsOnlySurface = isProfilePayload || urlPath.includes("/HomeLatestTimeline") || urlPath.includes("/TweetDetail") || urlPath.includes("/UserTweets") || urlPath.includes("/UserMedia") || urlPath.includes("/HighlightsTweets") || urlPath.includes("/Likes");
+    const surface = urlPath.includes("/SearchTimeline") ? "search" : "timeline";
+    const candidates = /* @__PURE__ */ new Map();
+    const entryRefs = [];
+    function extractEntryId(entry) {
+      const rawEntryId = typeof entry.entryId === "string" ? entry.entryId : "";
+      const content = isRecord(entry.content) ? entry.content : isRecord(entry.item) ? entry.item : void 0;
+      const itemContent = content && isRecord(content.itemContent) ? content.itemContent : void 0;
+      if (itemContent && isRecord(itemContent.tweet_results)) {
+        const tweet = unwrapTweet(itemContent.tweet_results.result);
+        if (tweet && typeof tweet.rest_id === "string") return tweet.rest_id;
+      }
+      if (itemContent && typeof itemContent.name === "string") {
+        return rawEntryId || `trend:${itemContent.name}`;
+      }
+      return rawEntryId;
+    }
+    function walkInstructions(node) {
+      if (Array.isArray(node)) {
+        for (const child of node) walkInstructions(child);
+        return;
+      }
+      if (!isRecord(node)) return;
+      if (Array.isArray(node.entries)) {
+        processEntriesArray(node.entries);
+      }
+      if (Array.isArray(node.moduleItems)) {
+        processEntriesArray(node.moduleItems);
+      }
+      for (const val of Object.values(node)) {
+        walkInstructions(val);
+      }
+    }
+    function processEntriesArray(entries) {
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        if (!isRecord(entry)) continue;
+        const entryId = typeof entry.entryId === "string" ? entry.entryId : "";
+        if (entryId && isNoiseEntryId(entryId)) {
+          entries.splice(i, 1);
+          i--;
+          continue;
+        }
+        const content = isRecord(entry.content) ? entry.content : isRecord(entry.item) ? entry.item : void 0;
+        const itemContent = content && isRecord(content.itemContent) ? content.itemContent : void 0;
+        if (itemContent?.promotedMetadata) {
+          entries.splice(i, 1);
+          i--;
+          continue;
+        }
+        const socialCtx = (itemContent && isRecord(itemContent.socialContext) ? itemContent.socialContext : void 0) ?? (content && isRecord(content.clientEventInfo) ? content.clientEventInfo : void 0);
+        const socialFollowing = isRecord(socialCtx) && typeof socialCtx.contextType === "string" && socialCtx.contextType === "Follow";
+        if (itemContent && isRecord(itemContent.tweet_results)) {
+          const tweet = unwrapTweet(itemContent.tweet_results.result);
+          if (!tweet) continue;
+          const ytIds = extractTweetYouTubeIds(tweet);
+          const item = extractTweetItem(tweet, surface, ytIds, socialFollowing);
+          polishTweetPresentation(tweet, config2, ytIds);
+          if (item && config2.x.caliberFilter && !isAdsOnlySurface) {
+            candidates.set(item.id, item);
+            entryRefs.push({ list: entries, itemId: item.id });
+          }
+          continue;
+        }
+        if (itemContent && typeof itemContent.name === "string" && (itemContent.__typename === "TimelineTrend" || isRecord(itemContent.trendMetadata) || entryId.startsWith("trend-"))) {
+          const trendName = itemContent.name.trim();
+          const trendMeta = isRecord(itemContent.trendMetadata) ? itemContent.trendMetadata : {};
+          const domainCtx = typeof trendMeta.domainContext === "string" ? trendMeta.domainContext : void 0;
+          const metaDesc = typeof trendMeta.metaDescription === "string" ? trendMeta.metaDescription : "";
+          if (/promoted/i.test(metaDesc)) {
+            entries.splice(i, 1);
+            i--;
+            continue;
+          }
+          itemContent.name = calmTitle(trendName);
+          if (config2.x.caliberFilter && !isAdsOnlySurface && trendName) {
+            const trendId = entryId || `trend:${trendName}`;
+            candidates.set(trendId, {
+              platform: "x",
+              id: trendId,
+              surface: "search",
+              titleOrText: trendName,
+              secondaryText: [domainCtx, metaDesc].filter(Boolean).join(" \xB7 ") || void 0
+            });
+            entryRefs.push({ list: entries, itemId: trendId });
+          }
+        }
+      }
+    }
+    walkInstructions(data);
+    if (candidates.size === 0) {
+      return data;
+    }
+    const droppedIds = await decide([...candidates.values()]);
+    if (droppedIds.size === 0) return data;
+    const listsToPrune = /* @__PURE__ */ new Map();
+    for (const ref of entryRefs) {
+      if (ref.itemId && droppedIds.has(ref.itemId)) {
+        let set = listsToPrune.get(ref.list);
+        if (!set) {
+          set = /* @__PURE__ */ new Set();
+          listsToPrune.set(ref.list, set);
+        }
+        set.add(ref.itemId);
+      }
+    }
+    for (const [list, ids] of listsToPrune) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const entry = list[i];
+        if (!isRecord(entry)) continue;
+        const id = extractEntryId(entry);
+        if (id && ids.has(id)) {
+          list.splice(i, 1);
+        }
+      }
+    }
+    return data;
+  }
+
+  // src/adapters/youtube-json.ts
+  var VIDEO_RENDERER_KEYS = [
+    "videoRenderer",
+    "compactVideoRenderer",
+    "gridVideoRenderer",
+    "videoWithContextRenderer"
+  ];
+  var SHORTS_KEYS = /* @__PURE__ */ new Set([
+    "reelShelfRenderer",
+    "reelItemRenderer",
+    "shortsLockupViewModel"
+  ]);
+  var AD_AND_NOISE_KEYS = /* @__PURE__ */ new Set([
+    "adSlotRenderer",
+    "promotedSparklesWebRenderer",
+    "promotedVideoRenderer",
+    "miniGameCardViewModel",
+    "radioRenderer",
+    "compactRadioRenderer"
+  ]);
+  var PRUNABLE_WRAPPERS = /* @__PURE__ */ new Set([
+    "richItemRenderer",
+    "richShelfRenderer",
+    "richSectionRenderer",
+    "shelfRenderer",
+    "content",
+    "contents",
+    "itemSectionRenderer"
+  ]);
+  function isYouTubeChannelPayload(data) {
+    if (!isRecord(data)) return false;
+    if (isRecord(data.metadata) && isRecord(data.metadata.channelMetadataRenderer)) return true;
+    if (isRecord(data.header) && (isRecord(data.header.pageHeaderRenderer) || isRecord(data.header.c4TabbedHeaderRenderer))) {
+      return true;
+    }
+    return false;
+  }
+  function surfaceFromEndpoint(urlPath) {
+    if (urlPath.includes("/search") || urlPath.includes("/results")) return "search";
+    if (urlPath.includes("/next")) return "watch_next";
+    return "home";
+  }
+  function readText(node) {
+    if (!isRecord(node)) return "";
+    if (typeof node.simpleText === "string") return node.simpleText;
+    if (typeof node.content === "string") return node.content;
+    if (Array.isArray(node.runs)) {
+      return node.runs.map((run) => isRecord(run) && typeof run.text === "string" ? run.text : "").join("");
+    }
+    return "";
+  }
+  function rewriteText(node, transform) {
+    if (!isRecord(node)) return;
+    if (typeof node.simpleText === "string") {
+      node.simpleText = transform(node.simpleText);
+    } else if (typeof node.content === "string") {
+      node.content = transform(node.content);
+    } else if (Array.isArray(node.runs) && node.runs.length === 1 && isRecord(node.runs[0])) {
+      const single = node.runs[0];
+      if (typeof single.text === "string") {
+        single.text = transform(single.text);
+      }
+    } else if (Array.isArray(node.runs) && node.runs.length > 1) {
+      const full = readText(node);
+      if (full) {
+        node.runs = [{ text: transform(full) }];
+      }
+    }
+  }
+  function parseDurationSec(raw) {
+    if (!raw) return void 0;
+    const clean = raw.trim();
+    if (!/^\d+(?::\d{1,2}){1,2}$/.test(clean)) return void 0;
+    const parts = clean.split(":").map((n) => Number.parseInt(n, 10));
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return void 0;
+  }
+  function containsShortsUrl(obj) {
+    if (typeof obj === "string") return obj.startsWith("/shorts/");
+    if (Array.isArray(obj)) return obj.some(containsShortsUrl);
+    if (isRecord(obj)) {
+      for (const [k, v] of Object.entries(obj)) {
+        if (SHORTS_KEYS.has(k)) return true;
+        if ((k === "url" || k === "canonicalBaseUrl") && typeof v === "string" && v.startsWith("/shorts")) {
+          return true;
+        }
+        if (containsShortsUrl(v)) return true;
+      }
+    }
+    return false;
+  }
+  function isMixLockup(lockup) {
+    const raw = JSON.stringify(lockup.contentImage ?? {});
+    return raw.includes('"imageName":"MIX"');
+  }
+  function extractFromVideoRenderer(renderer, surface) {
+    const id = typeof renderer.videoId === "string" ? renderer.videoId : "";
+    if (!id) return null;
+    const title = readText(renderer.title) || readText(renderer.headline);
+    if (!title) return null;
+    const byline = renderer.shortBylineText ?? renderer.longBylineText ?? renderer.ownerText;
+    const channelName = readText(byline);
+    let channelId;
+    if (isRecord(byline) && Array.isArray(byline.runs)) {
+      for (const run of byline.runs) {
+        if (!isRecord(run) || !isRecord(run.navigationEndpoint)) continue;
+        const browse = run.navigationEndpoint.browseEndpoint;
+        if (isRecord(browse)) {
+          if (typeof browse.browseId === "string") channelId = browse.browseId;
+          if (!channelId && typeof browse.canonicalBaseUrl === "string") {
+            channelId = browse.canonicalBaseUrl.replace(/^\//, "");
+          }
+        }
+      }
+    }
+    const lengthNode = renderer.lengthText;
+    const durationSec = parseDurationSec(readText(lengthNode));
+    return {
+      platform: "youtube",
+      id,
+      creatorId: channelId,
+      creatorHandle: channelName || void 0,
+      surface,
+      titleOrText: title,
+      durationSec
+    };
+  }
+  function findBrowseEndpoint(node) {
+    if (!isRecord(node)) return {};
+    if (isRecord(node.browseEndpoint)) {
+      const be = node.browseEndpoint;
+      const browseId = typeof be.browseId === "string" ? be.browseId : void 0;
+      const base = typeof be.canonicalBaseUrl === "string" ? be.canonicalBaseUrl : "";
+      const handle2 = base.startsWith("/@") ? base.slice(1) : void 0;
+      if (browseId || handle2) return { browseId, handle: handle2 };
+    }
+    for (const val of Object.values(node)) {
+      if (isRecord(val) || Array.isArray(val)) {
+        const hit = findBrowseEndpoint(val);
+        if (hit.browseId || hit.handle) return hit;
+      }
+    }
+    return {};
+  }
+  function findLockupDurationSec(contentImage) {
+    if (!isRecord(contentImage)) return void 0;
+    const tvm = contentImage.thumbnailViewModel;
+    if (!isRecord(tvm) || !Array.isArray(tvm.overlays)) return void 0;
+    for (const ov of tvm.overlays) {
+      if (!isRecord(ov) || !isRecord(ov.thumbnailOverlayBadgeViewModel)) continue;
+      const badges = ov.thumbnailOverlayBadgeViewModel.thumbnailBadges;
+      if (!Array.isArray(badges)) continue;
+      for (const b of badges) {
+        if (isRecord(b) && isRecord(b.thumbnailBadgeViewModel) && typeof b.thumbnailBadgeViewModel.text === "string") {
+          const parsed = parseDurationSec(b.thumbnailBadgeViewModel.text);
+          if (parsed !== void 0) return parsed;
+        }
+      }
+    }
+    return void 0;
+  }
+  function extractFromLockup(lockup, surface) {
+    const id = typeof lockup.contentId === "string" ? lockup.contentId : "";
+    if (!id || id.length !== 11) return null;
+    const meta = isRecord(lockup.metadata) ? lockup.metadata.lockupMetadataViewModel : void 0;
+    if (!isRecord(meta)) return null;
+    const title = readText(meta.title);
+    if (!title) return null;
+    const { browseId, handle: handle2 } = findBrowseEndpoint(meta.image ?? meta.metadata);
+    let channelDisplayName = "";
+    const contextParts = [];
+    const contentMeta = isRecord(meta.metadata) ? meta.metadata.contentMetadataViewModel : void 0;
+    if (isRecord(contentMeta) && Array.isArray(contentMeta.metadataRows)) {
+      contentMeta.metadataRows.forEach((row, rowIdx) => {
+        if (!isRecord(row) || !Array.isArray(row.metadataParts)) return;
+        for (const part of row.metadataParts) {
+          if (!isRecord(part)) continue;
+          const txt = readText(part.text).trim();
+          if (!txt) continue;
+          if (rowIdx === 0 && !channelDisplayName) channelDisplayName = txt;
+          contextParts.push(txt);
+        }
+      });
+    }
+    const durationSec = findLockupDurationSec(lockup.contentImage);
+    return {
+      platform: "youtube",
+      id,
+      creatorId: browseId || (channelDisplayName ? channelDisplayName : void 0),
+      creatorHandle: handle2 || channelDisplayName || void 0,
+      surface,
+      titleOrText: title,
+      ...contextParts.length > 0 ? { secondaryText: contextParts.join(" \xB7 ") } : {},
+      ...durationSec !== void 0 ? { durationSec } : {}
+    };
+  }
+  function resolveBetterYouTubeTitle(rawTitle, id, config2) {
+    if (config2.youtube.dearrowTitles && id && isVagueClickbaitTitle(rawTitle)) {
+      const curated = getCachedDeArrowTitle(id);
+      if (curated) return config2.youtube.calmTitles ? calmTitle(curated) : curated;
+    }
+    return config2.youtube.calmTitles ? calmTitle(rawTitle) : rawTitle;
+  }
+  function dehypeVideoRenderer(renderer, config2) {
+    const id = typeof renderer.videoId === "string" ? renderer.videoId : void 0;
+    if (config2.youtube.calmTitles || config2.youtube.dearrowTitles) {
+      if (renderer.title) rewriteText(renderer.title, (t) => resolveBetterYouTubeTitle(t, id, config2));
+      if (renderer.headline) rewriteText(renderer.headline, (t) => resolveBetterYouTubeTitle(t, id, config2));
+    }
+    if (config2.youtube.midFrameThumbs && isRecord(renderer.thumbnail) && Array.isArray(renderer.thumbnail.thumbnails)) {
+      for (const thumb of renderer.thumbnail.thumbnails) {
+        if (isRecord(thumb) && typeof thumb.url === "string") {
+          thumb.url = midFrameThumbUrl(thumb.url, id);
+        }
+      }
+    }
+  }
+  function dehypeLockup(lockup, config2) {
+    const id = typeof lockup.contentId === "string" ? lockup.contentId : void 0;
+    if ((config2.youtube.calmTitles || config2.youtube.dearrowTitles) && isRecord(lockup.metadata)) {
+      const meta = lockup.metadata.lockupMetadataViewModel;
+      if (isRecord(meta) && meta.title) {
+        rewriteText(meta.title, (t) => resolveBetterYouTubeTitle(t, id, config2));
+      }
+    }
+    if (config2.youtube.midFrameThumbs && isRecord(lockup.contentImage)) {
+      const tvm = lockup.contentImage.thumbnailViewModel;
+      if (isRecord(tvm) && isRecord(tvm.image) && Array.isArray(tvm.image.sources)) {
+        for (const src of tvm.image.sources) {
+          if (isRecord(src) && typeof src.url === "string") {
+            src.url = midFrameThumbUrl(src.url, id);
+          }
+        }
+      }
+    }
+  }
+  async function filterYouTubeJson(data, urlPath, pageUrl, config2, decide) {
+    if (!config2.enabled || !config2.youtube.enabled) return data;
+    if (!isRecord(data) && !Array.isArray(data)) return data;
+    const surface = surfaceFromEndpoint(urlPath);
+    const safeRoute = isYouTubeSafeRoute(pageUrl) || isYouTubeChannelPayload(data);
+    const candidates = /* @__PURE__ */ new Map();
+    function collectAndStripNoise(node) {
+      if (Array.isArray(node)) {
+        let removedAny = false;
+        for (let i = 0; i < node.length; i++) {
+          if (collectAndStripNoise(node[i])) {
+            node.splice(i, 1);
+            i--;
+            removedAny = true;
+          }
+        }
+        return removedAny && node.length === 0;
+      }
+      if (!isRecord(node)) return false;
+      for (const key of Object.keys(node)) {
+        if (AD_AND_NOISE_KEYS.has(key)) {
+          delete node[key];
+          return Object.keys(node).length === 0;
+        }
+        if (config2.youtube.hideShorts && SHORTS_KEYS.has(key)) {
+          delete node[key];
+          return Object.keys(node).length === 0;
+        }
+        if (config2.youtube.hideShorts && key === "gridShelfViewModel" && containsShortsUrl(node[key])) {
+          delete node[key];
+          return Object.keys(node).length === 0;
+        }
+      }
+      if (isRecord(node.lockupViewModel)) {
+        if (isMixLockup(node.lockupViewModel)) {
+          delete node.lockupViewModel;
+          return Object.keys(node).length === 0;
+        }
+        if (config2.youtube.hideShorts && containsShortsUrl(node.lockupViewModel)) {
+          delete node.lockupViewModel;
+          return Object.keys(node).length === 0;
+        }
+        const item = extractFromLockup(node.lockupViewModel, surface);
+        if (item && !safeRoute && config2.youtube.caliberFilter) {
+          candidates.set(item.id, item);
+        }
+      }
+      for (const key of VIDEO_RENDERER_KEYS) {
+        const renderer = node[key];
+        if (!isRecord(renderer)) continue;
+        if (config2.youtube.hideShorts && containsShortsUrl(renderer.navigationEndpoint)) {
+          delete node[key];
+          return Object.keys(node).length === 0;
+        }
+        const item = extractFromVideoRenderer(renderer, surface);
+        if (item && !safeRoute && config2.youtube.caliberFilter) {
+          candidates.set(item.id, item);
+        }
+      }
+      let lostPrimaryContent = false;
+      for (const key of Object.keys(node)) {
+        const childBecameEmpty = collectAndStripNoise(node[key]);
+        if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
+          delete node[key];
+          if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
+            lostPrimaryContent = true;
+          }
+        }
+      }
+      return lostPrimaryContent || Object.keys(node).length === 0;
+    }
+    collectAndStripNoise(data);
+    const droppedIds = candidates.size > 0 ? await decide([...candidates.values()]) : /* @__PURE__ */ new Set();
+    function applyVerdictsAndDehype(node) {
+      if (Array.isArray(node)) {
+        let removedAny = false;
+        for (let i = node.length - 1; i >= 0; i--) {
+          if (applyVerdictsAndDehype(node[i])) {
+            node.splice(i, 1);
+            removedAny = true;
+          }
+        }
+        return removedAny && node.length === 0;
+      }
+      if (!isRecord(node)) return false;
+      if (isRecord(node.lockupViewModel)) {
+        const id = typeof node.lockupViewModel.contentId === "string" ? node.lockupViewModel.contentId : "";
+        if (id && droppedIds.has(id)) {
+          delete node.lockupViewModel;
+          return Object.keys(node).length === 0;
+        }
+        dehypeLockup(node.lockupViewModel, config2);
+      }
+      for (const key of VIDEO_RENDERER_KEYS) {
+        const renderer = node[key];
+        if (!isRecord(renderer)) continue;
+        const id = typeof renderer.videoId === "string" ? renderer.videoId : "";
+        if (id && droppedIds.has(id)) {
+          delete node[key];
+          return Object.keys(node).length === 0;
+        }
+        dehypeVideoRenderer(renderer, config2);
+      }
+      let lostPrimaryContent = false;
+      for (const key of Object.keys(node)) {
+        const childBecameEmpty = applyVerdictsAndDehype(node[key]);
+        if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
+          delete node[key];
+          if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
+            lostPrimaryContent = true;
+          }
+        }
+      }
+      return lostPrimaryContent || Object.keys(node).length === 0;
+    }
+    applyVerdictsAndDehype(data);
+    return data;
+  }
+
+  // src/background/rewrite.ts
+  var TWITTER_TIMELINE_RE = /\/i\/api\/graphql\/[^/]+\/(HomeTimeline|HomeLatestTimeline|ExplorePage|GenericTimelineById|ExploreSidebar|SearchTimeline)/;
+  function shouldFilterUrl(url, config2) {
+    if (!config2.enabled) return false;
+    const host = url.hostname;
+    const path = url.pathname;
+    if (host.endsWith("youtube.com")) {
+      return config2.youtube.enabled && path.startsWith("/youtubei/v1/");
+    }
+    if (host === "x.com" || host === "twitter.com") {
+      return config2.x.enabled && TWITTER_TIMELINE_RE.test(path);
+    }
+    if (host.endsWith("instagram.com")) {
+      return config2.instagram.enabled && (path === "/graphql/query" || path.startsWith("/api/v1/clips/home") || path.startsWith("/api/v1/feed/timeline"));
+    }
+    if (host.endsWith("tiktok.com")) {
+      return config2.tiktok.enabled && (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"));
+    }
+    return false;
+  }
+  async function rewriteResponseBody(rawUrl, pageUrl, text, config2, decideBatch2) {
+    try {
+      const url = new URL(rawUrl);
+      if (!shouldFilterUrl(url, config2)) return null;
+      const json = JSON.parse(text);
+      const host = url.hostname;
+      const path = url.pathname;
+      let out = json;
+      if (host.endsWith("youtube.com")) {
+        out = await filterYouTubeJson(json, path, pageUrl, config2, decideBatch2);
+      } else if (host === "x.com" || host === "twitter.com") {
+        out = await filterTwitterJson(json, path, config2, decideBatch2);
+      } else if (host.endsWith("instagram.com")) {
+        out = await filterInstagramJson(json, path, config2, decideBatch2, pageUrl);
+      } else if (host.endsWith("tiktok.com")) {
+        out = await filterTikTokJson(json, config2, decideBatch2, path, pageUrl);
+      }
+      return JSON.stringify(out);
+    } catch {
+      return null;
+    }
+  }
+
+  // src/shared/intercept.ts
+  var MAX_STREAM_BYTES = 12 * 1024 * 1024;
   var INTERCEPT_URLS = [
-    "https://www.youtube.com/",
-    "https://www.youtube.com/?*",
-    "https://www.youtube.com/results?*",
     "https://www.youtube.com/youtubei/v1/browse*",
     "https://www.youtube.com/youtubei/v1/next*",
     "https://www.youtube.com/youtubei/v1/search*",
@@ -2369,163 +2283,71 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
     "https://www.tiktok.com/api/recommend/item_list/*",
     "https://www.tiktok.com/api/post/item_list/*"
   ];
-  var TWITTER_TIMELINE_RE = /\/i\/api\/graphql\/[^/]+\/(HomeTimeline|HomeLatestTimeline|ExplorePage|GenericTimelineById|ExploreSidebar|SearchTimeline)/;
-  function shouldFilterRequest(details) {
-    if (!config.enabled) return false;
-    let parsed;
-    try {
-      parsed = new URL(details.url);
-    } catch {
-      return false;
-    }
-    const host = parsed.hostname;
-    const path = parsed.pathname;
-    if (host.endsWith("youtube.com")) {
-      if (!config.youtube.enabled) return false;
-      if (details.type === "main_frame") {
-        return path === "/" || path === "/results";
-      }
-      return path.startsWith("/youtubei/v1/");
-    }
-    if (host === "x.com" || host === "twitter.com") {
-      return config.x.enabled && TWITTER_TIMELINE_RE.test(path);
-    }
-    if (host.endsWith("instagram.com")) {
-      return config.instagram.enabled && (path === "/graphql/query" || path.startsWith("/api/v1/clips/home") || path.startsWith("/api/v1/feed/timeline"));
-    }
-    if (host.endsWith("tiktok.com")) {
-      return config.tiktok.enabled && (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"));
-    }
-    return false;
+  var INTERCEPT_RES = INTERCEPT_URLS.map(
+    (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
+  );
+  function matchesInterceptUrl(url) {
+    return INTERCEPT_RES.some((re) => re.test(url));
   }
-  var MAX_STREAM_BYTES = 12 * 1024 * 1024;
-  browser.webRequest.onBeforeRequest.addListener(
-    (details) => {
-      if (!shouldFilterRequest(details)) return {};
-      let filter;
-      try {
-        filter = browser.webRequest.filterResponseData(details.requestId);
-      } catch {
-        return {};
+
+  // src/background/index.ts
+  var config = structuredClone(DEFAULT_CONFIG);
+  var SESSION_COUNT_KEY = "sieveSessionFiltered";
+  async function getSessionCount() {
+    const stored = await chrome.storage.session.get(SESSION_COUNT_KEY);
+    const n = stored[SESSION_COUNT_KEY];
+    return typeof n === "number" ? n : 0;
+  }
+  async function setSessionCount(n) {
+    await chrome.storage.session.set({ [SESSION_COUNT_KEY]: n });
+  }
+  var seeds = {
+    hnVideos: /* @__PURE__ */ new Set(),
+    hnChannels: /* @__PURE__ */ new Set(),
+    slopChannels: /* @__PURE__ */ new Set()
+  };
+  var memory = createMemoryStore();
+  var novelty = createNoveltyMemory();
+  async function loadSeedSet(assetPath, target) {
+    try {
+      const res = await fetch(chrome.runtime.getURL(assetPath));
+      if (!res.ok) return;
+      const text = await res.text();
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed) target.add(trimmed);
       }
-      const chunks = [];
-      let bufferedBytes = 0;
-      let passthrough = false;
-      filter.ondata = (event) => {
-        if (passthrough) {
-          filter.write(event.data);
-          return;
-        }
-        const chunk = new Uint8Array(event.data);
-        bufferedBytes += chunk.byteLength;
-        if (bufferedBytes > MAX_STREAM_BYTES) {
-          passthrough = true;
-          if (chunks.length > 0) {
-            filter.write(concatByteChunks(chunks));
-            chunks.length = 0;
-          }
-          filter.write(chunk);
-          return;
-        }
-        chunks.push(chunk);
-      };
-      filter.onerror = () => {
-        try {
-          filter.disconnect();
-        } catch {
-        }
-      };
-      filter.onstop = async () => {
-        if (passthrough) {
-          try {
-            filter.close();
-          } catch {
-          }
-          return;
-        }
-        try {
-          const text = decodeUtf8Chunks(chunks);
-          const parsedUrl = new URL(details.url);
-          const host = parsedUrl.hostname;
-          const path = parsedUrl.pathname;
-          const pageUrl = details.documentUrl || details.originUrl || details.url;
-          if (details.type === "main_frame" && host.endsWith("youtube.com")) {
-            const rewritten = await rewriteYouTubeHtmlInitialData(
-              text,
-              details.url,
-              config,
-              decideBatch
-            );
-            filter.write(new TextEncoder().encode(rewritten));
-            return;
-          }
-          const json = JSON.parse(text);
-          let transformed = json;
-          if (host.endsWith("youtube.com")) {
-            transformed = await filterYouTubeJson(json, path, pageUrl, config, decideBatch);
-          } else if (host === "x.com" || host === "twitter.com") {
-            transformed = await filterTwitterJson(json, path, config, decideBatch);
-          } else if (host.endsWith("instagram.com")) {
-            transformed = await filterInstagramJson(json, path, config, decideBatch, pageUrl);
-          } else if (host.endsWith("tiktok.com")) {
-            transformed = await filterTikTokJson(json, config, decideBatch, path, pageUrl);
-          }
-          filter.write(new TextEncoder().encode(JSON.stringify(transformed)));
-        } catch {
-          if (chunks.length > 0) {
-            filter.write(concatByteChunks(chunks));
-          }
-        } finally {
-          try {
-            filter.close();
-          } catch {
-          }
-        }
-      };
-      return {};
-    },
-    {
-      urls: INTERCEPT_URLS,
-      types: ["main_frame", "xmlhttprequest"]
-    },
-    ["blocking"]
-  );
-  browser.webRequest.onBeforeSendHeaders.addListener(
-    (details) => {
-      if (!details.originUrl?.startsWith("moz-extension://") || !details.requestHeaders) {
-        return {};
-      }
-      const requestHeaders = details.requestHeaders.filter(
-        (h) => h.name.toLowerCase() !== "origin"
-      );
-      return { requestHeaders };
-    },
-    { urls: ["http://127.0.0.1/*", "http://localhost/*"] },
-    ["blocking", "requestHeaders"]
-  );
-  browser.webRequest.onBeforeSendHeaders.addListener(
-    (details) => {
-      if (!config.enabled || !config.tiktok.enabled || !config.tiktok.lightMode) return {};
-      if (!details.requestHeaders) return {};
-      let foundCookie = false;
-      const requestHeaders = details.requestHeaders.map((header) => {
-        if (header.name.toLowerCase() === "cookie" && typeof header.value === "string") {
-          foundCookie = true;
-          return { ...header, value: rewriteTikTokThemeCookieHeader(header.value) };
-        }
-        return header;
-      });
-      if (!foundCookie) {
-        requestHeaders.push({
-          name: "Cookie",
-          value: "tiktok_webapp_theme=light; tiktok_webapp_theme_source=custom"
-        });
-      }
-      return { requestHeaders };
-    },
-    { urls: ["*://*.tiktok.com/*", "*://tiktok.com/*"] },
-    ["blocking", "requestHeaders"]
-  );
+    } catch {
+    }
+  }
+  async function initConfigAndSeeds() {
+    try {
+      const stored = await chrome.storage.local.get("sieveConfig");
+      config = mergeConfig(stored.sieveConfig);
+    } catch {
+      config = structuredClone(DEFAULT_CONFIG);
+    }
+    await Promise.all([
+      loadSeedSet("assets/seeds/hn-videos.txt", seeds.hnVideos),
+      loadSeedSet("assets/seeds/hn-channels.txt", seeds.hnChannels),
+      loadSeedSet("assets/seeds/slop-channels.txt", seeds.slopChannels)
+    ]);
+  }
+  var ready;
+  function ensureReady() {
+    ready ??= initConfigAndSeeds();
+    return ready;
+  }
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.sieveConfig) {
+      config = mergeConfig(changes.sieveConfig.newValue);
+    }
+  });
+  var decideBatch = async (items) => {
+    const dropped = await runSieveOnBatch(items, config, seeds, memory, fetch, novelty);
+    if (dropped.size > 0) await setSessionCount(await getSessionCount() + dropped.size);
+    return dropped;
+  };
   function parseGraderOverride(raw) {
     if (!isRecord(raw)) return void 0;
     const mode = raw.mode === "off" || raw.mode === "local" || raw.mode === "api" ? raw.mode : null;
@@ -2541,25 +2363,33 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
       streamHoldMs: raw.streamHoldMs
     };
   }
-  browser.runtime.onMessage.addListener((raw) => {
+  function handle(raw, sender) {
     if (!isRecord(raw) || typeof raw.type !== "string") return void 0;
+    if (raw.type === "REWRITE_RESPONSE") {
+      if (!sender.tab || typeof raw.url !== "string" || typeof raw.pageUrl !== "string" || typeof raw.body !== "string" || raw.body.length > MAX_STREAM_BYTES || !matchesInterceptUrl(raw.url)) {
+        return Promise.resolve({ body: null });
+      }
+      return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, decideBatch).then(
+        (body) => ({ body })
+      );
+    }
     if (raw.type === "GET_STATUS") {
       const stats = memory.counts();
-      const status = {
-        sessionFilteredCount,
-        cachedItems: stats.cachedItems,
-        learnedCreators: stats.learnedCreators,
-        dwelledCount: novelty.size(),
-        hnVideos: seeds.hnVideos.size,
-        slopChannels: seeds.slopChannels.size
-      };
-      return Promise.resolve(status);
+      return getSessionCount().then(
+        (sessionFilteredCount) => ({
+          sessionFilteredCount,
+          cachedItems: stats.cachedItems,
+          learnedCreators: stats.learnedCreators,
+          dwelledCount: novelty.size(),
+          hnVideos: seeds.hnVideos.size,
+          slopChannels: seeds.slopChannels.size
+        })
+      );
     }
     if (raw.type === "CLEAR_CACHE") {
-      sessionFilteredCount = 0;
       novelty.clear();
       clearDeArrowCache();
-      return memory.clear().then(() => ({ ok: true }));
+      return Promise.all([setSessionCount(0), memory.clear()]).then(() => ({ ok: true }));
     }
     if (raw.type === "RECORD_DWELL" && typeof raw.text === "string") {
       if (config.enabled && config.noveltyFilter) {
@@ -2621,6 +2451,10 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
       );
     }
     return void 0;
+  }
+  chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
+    void ensureReady().then(() => handle(raw, sender)).then(sendResponse, () => sendResponse(void 0));
+    return true;
   });
-  void initConfigAndSeeds();
+  void ensureReady();
 })();

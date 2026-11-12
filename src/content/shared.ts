@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
+import { INTERCEPT_TAG } from "../shared/intercept.js";
 import { isRecord, type FeedItem, type SieveConfig } from "../types.js";
 
 const LOCAL_CACHE_KEY = "__sieve_cached_flags_v1";
@@ -36,7 +37,30 @@ export function applyHtmlFlags(flags: Record<string, string>): void {
   }
 }
 
+let relayInstalled = false;
+
+/** Relays MAIN-world intercept requests (content/intercept.ts) to the service worker. */
+export function installInterceptRelay(): void {
+  if (relayInstalled) return;
+  relayInstalled = true;
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const d: unknown = event.data;
+    if (!isRecord(d) || d.tag !== INTERCEPT_TAG || d.dir !== "req" || typeof d.id !== "string") {
+      return;
+    }
+    const id = d.id;
+    const reply = (body: string | null): void =>
+      window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
+    chrome.runtime
+      .sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body })
+      .then((res: unknown) => reply(isRecord(res) && typeof res.body === "string" ? res.body : null))
+      .catch(() => reply(null));
+  });
+}
+
 export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
+  installInterceptRelay();
   const cached = readCachedFlags();
   if (document.documentElement) {
     for (const [k, v] of Object.entries(cached)) {
@@ -45,7 +69,7 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
   }
 
   let current = structuredClone(DEFAULT_CONFIG);
-  void browser.storage.local
+  void chrome.storage.local
     .get("sieveConfig")
     .then((stored) => {
       current = mergeConfig(stored.sieveConfig);
@@ -55,7 +79,7 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
       onConfig(current);
     });
 
-  browser.storage.onChanged.addListener((changes, area) => {
+  chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.sieveConfig) {
       current = mergeConfig(changes.sieveConfig.newValue);
       onConfig(current);
@@ -91,7 +115,7 @@ export async function evaluateDomBatch(
 ): Promise<void> {
   if (items.length === 0) return;
   try {
-    const res: unknown = await browser.runtime.sendMessage({
+    const res: unknown = await chrome.runtime.sendMessage({
       type: "EVALUATE_SSR_ITEMS",
       items,
     });
@@ -154,7 +178,7 @@ export function createDwellTracker(
               if (text.length >= 24) {
                 recorded.add(target);
                 io.unobserve(target);
-                void browser.runtime.sendMessage({ type: "RECORD_DWELL", text }).catch(() => {});
+                void chrome.runtime.sendMessage({ type: "RECORD_DWELL", text }).catch(() => {});
               }
             }, dwellMs);
             timers.set(target, t);

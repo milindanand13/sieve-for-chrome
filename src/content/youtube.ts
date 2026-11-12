@@ -56,7 +56,7 @@ async function resolveVagueDomTitles(): Promise<void> {
   if (titleElsByVid.size === 0) return;
 
   try {
-    const res: unknown = await browser.runtime.sendMessage({
+    const res: unknown = await chrome.runtime.sendMessage({
       type: "RESOLVE_DEARROW_TITLES",
       videoIds: [...titleElsByVid.keys()].slice(0, 16),
     });

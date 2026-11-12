@@ -147,7 +147,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     return el;
   }
   async function initOptions() {
-    const stored = await browser.storage.local.get("sieveConfig");
+    const stored = await chrome.storage.local.get("sieveConfig");
     const config = mergeConfig(stored.sieveConfig);
     const passFollowedEl = requireElement("pass-followed", HTMLInputElement);
     const noveltyFilterEl = requireElement("novelty-filter", HTMLInputElement);
@@ -193,10 +193,19 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         config.grader.rubric = rubricEl.value;
         config.allowHandles = parseLines(allowEl.value);
         config.blockHandles = parseLines(blockEl.value);
-        void browser.storage.local.set({ sieveConfig: config }).then(() => {
+        void chrome.storage.local.set({ sieveConfig: config }).then(() => {
           if (saveIndicator) saveIndicator.textContent = "saved locally";
         });
       }, 180);
+    }
+    async function ensureEndpointPermission() {
+      if (parseGraderMode(modeEl.value) !== "api") return true;
+      try {
+        const origin = `${new URL(endpointEl.value.trim()).origin}/*`;
+        return await chrome.permissions.request({ origins: [origin] });
+      } catch {
+        return false;
+      }
     }
     modeEl.addEventListener("change", () => {
       const nextMode = parseGraderMode(modeEl.value);
@@ -208,6 +217,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         modelEl.value = API_DEFAULT_MODEL;
       }
       scheduleSave();
+      if (nextMode === "api") {
+        void ensureEndpointPermission().then((ok) => {
+          if (!ok && testResult) testResult.textContent = "host permission not granted";
+        });
+      }
     });
     for (const el of [
       passFollowedEl,
@@ -231,7 +245,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       testBtn.disabled = true;
       if (testResult) testResult.textContent = "testing...";
       try {
-        const res = await browser.runtime.sendMessage({
+        if (!await ensureEndpointPermission()) {
+          if (testResult) testResult.textContent = "host permission not granted";
+          return;
+        }
+        const res = await chrome.runtime.sendMessage({
           type: "TEST_GRADER",
           graderOverride: {
             mode: parseGraderMode(modeEl.value),
@@ -260,7 +278,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     async function refreshStats() {
       if (!statsEl) return;
       try {
-        const s = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+        const s = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
         if (!isRecord(s)) return;
         const hnVideos = typeof s.hnVideos === "number" ? s.hnVideos : 0;
         const slopChannels = typeof s.slopChannels === "number" ? s.slopChannels : 0;
@@ -273,7 +291,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       }
     }
     document.getElementById("clear-cache")?.addEventListener("click", async () => {
-      await browser.runtime.sendMessage({ type: "CLEAR_CACHE" });
+      await chrome.runtime.sendMessage({ type: "CLEAR_CACHE" });
       await refreshStats();
     });
     populateFields();

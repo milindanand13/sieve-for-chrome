@@ -32,7 +32,7 @@ function requireElement<T extends HTMLElement>(
 }
 
 async function initOptions(): Promise<void> {
-  const stored = await browser.storage.local.get("sieveConfig");
+  const stored = await chrome.storage.local.get("sieveConfig");
   const config: SieveConfig = mergeConfig(stored.sieveConfig);
 
   const passFollowedEl = requireElement("pass-followed", HTMLInputElement);
@@ -82,10 +82,21 @@ async function initOptions(): Promise<void> {
       config.allowHandles = parseLines(allowEl.value);
       config.blockHandles = parseLines(blockEl.value);
 
-      void browser.storage.local.set({ sieveConfig: config }).then(() => {
+      void chrome.storage.local.set({ sieveConfig: config }).then(() => {
         if (saveIndicator) saveIndicator.textContent = "saved locally";
       });
     }, 180);
+  }
+
+  // Cloud hosts are optional_host_permissions; ask on a user gesture. Local hosts are granted already.
+  async function ensureEndpointPermission(): Promise<boolean> {
+    if (parseGraderMode(modeEl.value) !== "api") return true;
+    try {
+      const origin = `${new URL(endpointEl.value.trim()).origin}/*`;
+      return await chrome.permissions.request({ origins: [origin] });
+    } catch {
+      return false;
+    }
   }
 
   modeEl.addEventListener("change", () => {
@@ -98,6 +109,11 @@ async function initOptions(): Promise<void> {
       modelEl.value = API_DEFAULT_MODEL;
     }
     scheduleSave();
+    if (nextMode === "api") {
+      void ensureEndpointPermission().then((ok) => {
+        if (!ok && testResult) testResult.textContent = "host permission not granted";
+      });
+    }
   });
 
   for (const el of [
@@ -124,7 +140,11 @@ async function initOptions(): Promise<void> {
     testBtn.disabled = true;
     if (testResult) testResult.textContent = "testing...";
     try {
-      const res: unknown = await browser.runtime.sendMessage({
+      if (!(await ensureEndpointPermission())) {
+        if (testResult) testResult.textContent = "host permission not granted";
+        return;
+      }
+      const res: unknown = await chrome.runtime.sendMessage({
         type: "TEST_GRADER",
         graderOverride: {
           mode: parseGraderMode(modeEl.value),
@@ -155,7 +175,7 @@ async function initOptions(): Promise<void> {
   async function refreshStats(): Promise<void> {
     if (!statsEl) return;
     try {
-      const s: unknown = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+      const s: unknown = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
       if (!isRecord(s)) return;
       const hnVideos = typeof s.hnVideos === "number" ? s.hnVideos : 0;
       const slopChannels = typeof s.slopChannels === "number" ? s.slopChannels : 0;
@@ -169,7 +189,7 @@ async function initOptions(): Promise<void> {
   }
 
   document.getElementById("clear-cache")?.addEventListener("click", async () => {
-    await browser.runtime.sendMessage({ type: "CLEAR_CACHE" });
+    await chrome.runtime.sendMessage({ type: "CLEAR_CACHE" });
     await refreshStats();
   });
 
