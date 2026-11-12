@@ -118,11 +118,13 @@ export interface CreatorRecord {
 
 export interface MemoryLookup {
   getItemVerdict(platform: Platform, id: string): ResolvedVerdict | undefined;
+  /** Reason stored with the cached verdict, if any. */
+  getItemReason?(platform: Platform, id: string): string | undefined;
   getCreatorVerdict(platform: Platform, creatorKey: string): ResolvedVerdict | undefined;
 }
 
 export interface MemoryStore extends MemoryLookup {
-  recordVerdict(item: FeedItem, verdict: ResolvedVerdict): Promise<void>;
+  recordVerdict(item: FeedItem, verdict: ResolvedVerdict, reason?: string): Promise<void>;
   clear(): Promise<void>;
   /** Resolves once persisted rows are loaded (service worker wake). */
   ready?: Promise<void>;

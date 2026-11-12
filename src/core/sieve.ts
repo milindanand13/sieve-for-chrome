@@ -109,7 +109,10 @@ export function evaluateLocalDecision(
   }
 
   const cachedVerdict = memory.getItemVerdict(item.platform, item.id);
-  if (cachedVerdict) return { verdict: cachedVerdict, reason: "cached verdict" };
+  if (cachedVerdict) {
+    const original = memory.getItemReason?.(item.platform, item.id);
+    return { verdict: cachedVerdict, reason: original ? `${original} (cached)` : "cached verdict" };
+  }
 
   for (const key of keys) {
     const learned = memory.getCreatorVerdict(item.platform, key);
@@ -188,9 +191,11 @@ export async function runSieveDetailed(
     .then(async (verdicts) => {
       for (const item of uncertain) {
         // Cache only what the model explicitly judged: "u", malformed and missing replies stay uncached.
-        const v = verdicts.get(item.id)?.verdict;
-        if (v === "k") await memory.recordVerdict(item, "keep");
-        else if (v === "d") await memory.recordVerdict(item, "drop");
+        const g = verdicts.get(item.id);
+        if (g?.verdict === "k") await memory.recordVerdict(item, "keep");
+        else if (g?.verdict === "d") {
+          await memory.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
+        }
       }
       return verdicts;
     })

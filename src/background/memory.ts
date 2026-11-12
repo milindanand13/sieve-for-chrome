@@ -15,6 +15,7 @@ const DB_NAME = "sieve_memory_v1";
 interface StoredVerdict {
   key: string;
   verdict: ResolvedVerdict;
+  reason?: string;
   at: number;
 }
 
@@ -139,17 +140,21 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       return hit.verdict;
     },
 
+    getItemReason(platform, id) {
+      return items.get(itemMapKey(platform, id))?.reason;
+    },
+
     getCreatorVerdict(platform, rawKey) {
       const normalized = rawKey.toLowerCase();
       // Per-site keys only: a verdict learned on YouTube never applies to X or Instagram.
       return evaluateCreatorRecord(creators.get(creatorMapKey(platform, normalized)));
     },
 
-    async recordVerdict(item: FeedItem, verdict: ResolvedVerdict) {
+    async recordVerdict(item: FeedItem, verdict: ResolvedVerdict, reason?: string) {
       if (verdict === "drop") droppedTotal += 1;
       const now = Date.now();
       const iKey = itemMapKey(item.platform, item.id);
-      const entry: StoredVerdict = { key: iKey, verdict, at: now };
+      const entry: StoredVerdict = { key: iKey, verdict, at: now, ...(reason ? { reason } : {}) };
 
       if (items.has(iKey)) items.delete(iKey);
       items.set(iKey, entry);

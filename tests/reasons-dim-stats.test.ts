@@ -197,6 +197,24 @@ describe("dim lists", () => {
   });
 });
 
+describe("cached verdict reason", () => {
+  it("keeps the original grader reason when a cached drop is reused", async () => {
+    const stored = new Map<string, { v: ResolvedVerdict; r?: string }>();
+    const mem: MemoryStore = {
+      getItemVerdict: (_p, id) => stored.get(id)?.v,
+      getItemReason: (_p, id) => stored.get(id)?.r,
+      getCreatorVerdict: () => undefined,
+      recordVerdict: async (i, v, r) => void stored.set(i.id, { v, r }),
+      clear: async () => {},
+      counts: () => ({ cachedItems: 0, learnedCreators: 0, droppedTotal: 0 }),
+    };
+    const it1 = item("v1", "celebrity thing here");
+    await runSieveDetailed([it1], DEFAULT_CONFIG, seeds, mem, fetchReply('{"drop":["0"],"why":{"0":"vague bait"}}'));
+    const again = await runSieveDetailed([it1], DEFAULT_CONFIG, seeds, mem, fetchReply("{}"));
+    expect(again.get("v1")).toBe("grader: vague bait (cached)");
+  });
+});
+
 describe("late grader verdicts", () => {
   it("skipHold returns at once and delivers grader drops through onLate", async () => {
     const { mem } = fakeMemory();
