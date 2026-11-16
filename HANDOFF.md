@@ -1,0 +1,5 @@
+Sieve for Chrome is Teddy Warner's feed filter ported from Firefox to Chrome, dimming slop on YouTube, X and Instagram with a local Ollama grader; branch `mv3-port` is pushed to Milind's fork (milindanand13/sieve), no PR opened and not merged yet.
+Verified in real Chrome: the extension loads, the grader test returns "ok" in about 2.9 s, and YouTube items dim with real reasons; the rest (80 tests passing, fixture parsing for X and Instagram) is verified by tests only.
+Not done: visual re-check on YouTube, X and Instagram after the latest label fix, the hide switch, stats table and drop log checks, YouTube fixtures, ponytail review, PR and merge to main, the "Sieve for Chrome" Google Doc, README polish.
+Next step for Milind: reload Sieve at chrome://extensions (circular arrow), open the options page, press "Reset to default" under the rubric once, then tell me so I can finish the checks.
+Risks: Instagram and X change their internals often; Ollama needs the Origin header stripped (done with a session rule, tested once); fixtures are gitignored because they hold his feed, so a fresh clone has no fixtures.
