@@ -58,6 +58,14 @@ export interface GraderSettings {
   streamHoldMs: number;
 }
 
+export interface DisplaySettings {
+  hideDropped: boolean;
+}
+
+export interface RecorderSettings {
+  enabled: boolean;
+}
+
 export interface SieveConfig {
   schemaVersion: number;
   enabled: boolean;
@@ -68,6 +76,8 @@ export interface SieveConfig {
   instagram: InstagramSettings;
   tiktok: TikTokSettings;
   grader: GraderSettings;
+  display: DisplaySettings;
+  recorder: RecorderSettings;
   allowHandles: string[];
   blockHandles: string[];
 }
@@ -83,6 +93,8 @@ export interface FeedItem {
   titleOrText: string;
   secondaryText?: string;
   durationSec?: number;
+  /** Second DOM-visible identifier (Instagram shortcode). */
+  altId?: string;
   linkedYoutubeIds?: string[];
   metrics?: {
     likes?: number;
@@ -106,12 +118,16 @@ export interface CreatorRecord {
 
 export interface MemoryLookup {
   getItemVerdict(platform: Platform, id: string): ResolvedVerdict | undefined;
+  /** Reason stored with the cached verdict, if any. */
+  getItemReason?(platform: Platform, id: string): string | undefined;
   getCreatorVerdict(platform: Platform, creatorKey: string): ResolvedVerdict | undefined;
 }
 
 export interface MemoryStore extends MemoryLookup {
-  recordVerdict(item: FeedItem, verdict: ResolvedVerdict): Promise<void>;
+  recordVerdict(item: FeedItem, verdict: ResolvedVerdict, reason?: string): Promise<void>;
   clear(): Promise<void>;
+  /** Resolves once persisted rows are loaded (service worker wake). */
+  ready?: Promise<void>;
   counts(): { cachedItems: number; learnedCreators: number; droppedTotal: number };
 }
 
@@ -123,13 +139,43 @@ export interface NoveltyMemory extends NoveltyLookup {
   recordDwelled(text: string): void;
   clear(): void;
   size(): number;
+  ready?: Promise<void>;
 }
 
 export type BatchDecider = (items: FeedItem[]) => Promise<Set<string>>;
 
+/** A graded drop that stays in the JSON; the content script dims the matching card. */
+export interface DimEntry {
+  id: string;
+  alt?: string;
+  site: Platform;
+  reason: string;
+  text: string;
+}
+
+/** An unconditional removal (ad, shorts, promoted, suggested) that is counted and logged. */
+export interface HardRemoval {
+  site: Platform;
+  reason: string;
+  text: string;
+}
+
+/** Collected by adapters while they rewrite one response. */
+export interface DropSink {
+  /** true when display.hideDropped: graded drops are removed from the JSON instead of dimmed. */
+  remove: boolean;
+  /** id -> reason, filled by the decider wrapper. */
+  reasons: Map<string, string>;
+  dimmed: DimEntry[];
+  hard: HardRemoval[];
+}
+
+export type RewriteResult = { body: string; dimmed: DimEntry[]; hard: HardRemoval[] };
+
 export type RuntimeMessage =
   | { type: "GET_STATUS" }
   | { type: "CLEAR_CACHE" }
+  | { type: "CLEAR_VERDICT_CACHE" }
   | { type: "RECORD_DWELL"; text: string }
   | { type: "RESOLVE_DEARROW_TITLES"; videoIds: string[] }
   | { type: "EVALUATE_SSR_ITEMS"; items: FeedItem[] }
@@ -146,6 +192,8 @@ export interface SieveStatus {
 
 export interface EvaluateSsrItemsResponse {
   dropped: string[];
+  /** id -> reason for every id in `dropped`. */
+  reasons: Record<string, string>;
 }
 
 export interface ResolveDearrowTitlesResponse {

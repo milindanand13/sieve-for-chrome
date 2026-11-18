@@ -1,8 +1,10 @@
 import { calmTitle, midFrameThumbUrl } from "../core/dehype.js";
+import { gradedDrop, hardRemoval } from "../core/sink.js";
 import { extractYouTubeIdsFromText } from "../core/sieve.js";
 import {
   isRecord,
   type BatchDecider,
+  type DropSink,
   type FeedItem,
   type FeedSurface,
   type JsonRecord,
@@ -272,6 +274,7 @@ export async function filterTwitterJson(
   urlPath: string,
   config: SieveConfig,
   decide: BatchDecider,
+  sink?: DropSink,
 ): Promise<unknown> {
   if (!config.enabled || !config.x.enabled) return data;
   if (!isRecord(data)) return data;
@@ -337,6 +340,7 @@ export async function filterTwitterJson(
 
       const entryId = typeof entry.entryId === "string" ? entry.entryId : "";
       if (entryId && isNoiseEntryId(entryId)) {
+        hardRemoval(sink, "x", /promoted/i.test(entryId) ? "promoted" : "suggested");
         entries.splice(i, 1);
         i--;
         continue;
@@ -347,6 +351,7 @@ export async function filterTwitterJson(
         content && isRecord(content.itemContent) ? content.itemContent : undefined;
 
       if (itemContent?.promotedMetadata) {
+        hardRemoval(sink, "x", "promoted");
         entries.splice(i, 1);
         i--;
         continue;
@@ -387,6 +392,7 @@ export async function filterTwitterJson(
         const domainCtx = typeof trendMeta.domainContext === "string" ? trendMeta.domainContext : undefined;
         const metaDesc = typeof trendMeta.metaDescription === "string" ? trendMeta.metaDescription : "";
         if (/promoted/i.test(metaDesc)) {
+          hardRemoval(sink, "x", "promoted", trendName);
           entries.splice(i, 1);
           i--;
           continue;
@@ -418,7 +424,7 @@ export async function filterTwitterJson(
 
   const listsToPrune = new Map<unknown[], Set<string>>();
   for (const ref of entryRefs) {
-    if (ref.itemId && droppedIds.has(ref.itemId)) {
+    if (ref.itemId && droppedIds.has(ref.itemId) && gradedDrop(sink, candidates.get(ref.itemId), ref.itemId)) {
       let set = listsToPrune.get(ref.list);
       if (!set) {
         set = new Set();

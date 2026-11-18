@@ -4,13 +4,12 @@ import type {
   MemoryLookup,
   MemoryStore,
   NoveltyLookup,
-  ResolvedVerdict,
   SeedSets,
   SieveConfig,
   Verdict,
 } from "../types.js";
 import { normalizeHandle } from "./dehype.js";
-import { gradeItemsBatch } from "./llm.js";
+import { gradeItemsDetailed, type GraderVerdict } from "./llm.js";
 import { isStructuralSlop } from "./slop-cadence.js";
 
 const COMMENT_BAIT_RE =
@@ -51,65 +50,80 @@ export function creatorKeysFor(item: FeedItem): string[] {
   return keys;
 }
 
-export function evaluateLocalTiers(
+export interface LocalDecision {
+  verdict: Verdict;
+  /** Short human label for the branch that decided; set on every drop. */
+  reason: string;
+}
+
+const KEEP = (reason: string): LocalDecision => ({ verdict: "keep", reason });
+const DROP = (reason: string): LocalDecision => ({ verdict: "drop", reason });
+
+export function evaluateLocalDecision(
   item: FeedItem,
   config: SieveConfig,
   seeds: SeedSets,
   memory: MemoryLookup,
   novelty?: NoveltyLookup,
-): Verdict {
-  if (item.isSponsored) return "drop";
+): LocalDecision {
+  // The user's own call (context-menu feedback) beats every rule.
+  const own = memory.getItemReason?.(item.platform, item.id);
+  const ownVerdict = own?.startsWith("you: ") ? memory.getItemVerdict(item.platform, item.id) : undefined;
+  if (own && ownVerdict) return { verdict: ownVerdict, reason: own };
+
+  if (item.isSponsored) return DROP("sponsored");
 
   const keys = creatorKeysFor(item);
   if (config.blockHandles.length > 0) {
     const blocked = new Set(config.blockHandles.map((h) => normalizeHandle(h)).filter(Boolean));
-    if (keys.some((k) => blocked.has(k))) return "drop";
+    if (keys.some((k) => blocked.has(k))) return DROP("blocked handle");
   }
 
   if (config.allowHandles.length > 0) {
     const allowed = new Set(config.allowHandles.map((h) => normalizeHandle(h)).filter(Boolean));
-    if (keys.some((k) => allowed.has(k))) return "keep";
+    if (keys.some((k) => allowed.has(k))) return KEEP("allowed handle");
   }
 
-  if (config.passFollowed && item.isFollowed) return "keep";
+  if (config.passFollowed && item.isFollowed) return KEEP("followed");
 
-  if (item.platform === "youtube" && seeds.hnVideos.has(item.id)) return "keep";
-  if (keys.some((k) => seeds.hnChannels.has(k))) return "keep";
+  if (item.platform === "youtube" && seeds.hnVideos.has(item.id)) return KEEP("hn video");
+  if (keys.some((k) => seeds.hnChannels.has(k))) return KEEP("hn channel");
 
   const ytIds = item.linkedYoutubeIds ?? extractYouTubeIdsFromText(item.titleOrText);
-  if (ytIds.some((vid) => seeds.hnVideos.has(vid))) return "keep";
+  if (ytIds.some((vid) => seeds.hnVideos.has(vid))) return KEEP("hn video link");
 
-  if (keys.some((k) => seeds.slopChannels.has(k))) return "drop";
+  if (keys.some((k) => seeds.slopChannels.has(k))) return DROP("slop list");
 
   const fullText = `${item.titleOrText} ${item.secondaryText ?? ""}`;
-  if (
-    COMMENT_BAIT_RE.test(fullText) ||
-    CRYPTO_CASINO_SPAM_RE.test(fullText) ||
-    SHORT_DRAMA_RE.test(fullText) ||
-    ATTENTION_TRAP_RE.test(fullText) ||
-    GOSSIP_DOMAIN_RE.test(fullText)
-  ) {
-    return "drop";
-  }
+  if (COMMENT_BAIT_RE.test(fullText)) return DROP("comment bait");
+  if (CRYPTO_CASINO_SPAM_RE.test(fullText)) return DROP("crypto spam");
+  if (SHORT_DRAMA_RE.test(fullText)) return DROP("short drama");
+  if (ATTENTION_TRAP_RE.test(fullText)) return DROP("hype headline");
+  if (GOSSIP_DOMAIN_RE.test(fullText)) return DROP("gossip");
 
   if (!item.isFollowed) {
     if (item.platform === "x" && config.x.slopCadenceFilter) {
-      if (isStructuralSlop(item.titleOrText, {}, 65)) return "drop";
+      if (isStructuralSlop(item.titleOrText, {}, 65)) return DROP("slop cadence");
     } else if (item.platform !== "youtube") {
-      if (isStructuralSlop(item.titleOrText, {}, 74)) return "drop";
+      if (isStructuralSlop(item.titleOrText, {}, 74)) return DROP("slop cadence");
     }
 
     if (config.noveltyFilter && novelty?.isRedundantRehash(item.titleOrText)) {
-      return "drop";
+      return DROP("novelty");
     }
   }
 
   const cachedVerdict = memory.getItemVerdict(item.platform, item.id);
-  if (cachedVerdict) return cachedVerdict;
+  if (cachedVerdict) {
+    const original = memory.getItemReason?.(item.platform, item.id);
+    return { verdict: cachedVerdict, reason: original ? `${original} (cached)` : "cached verdict" };
+  }
 
   for (const key of keys) {
     const learned = memory.getCreatorVerdict(item.platform, key);
-    if (learned) return learned;
+    if (learned) {
+      return { verdict: learned, reason: learned === "drop" ? "known-bad creator" : "known-good creator" };
+    }
   }
 
   if (item.platform === "x" && !item.isFollowed && item.metrics) {
@@ -117,11 +131,107 @@ export function evaluateLocalTiers(
     const replies = item.metrics.replies ?? 0;
     const quotes = item.metrics.quotes ?? 0;
     if (replies >= 40 && (replies > likes * 1.4 || quotes > likes * 1.1)) {
-      return "drop";
+      return DROP("ragebait ratio");
     }
   }
 
-  return "uncertain";
+  return { verdict: "uncertain", reason: "uncertain" };
+}
+
+export function evaluateLocalTiers(
+  item: FeedItem,
+  config: SieveConfig,
+  seeds: SeedSets,
+  memory: MemoryLookup,
+  novelty?: NoveltyLookup,
+): Verdict {
+  return evaluateLocalDecision(item, config, seeds, memory, novelty).verdict;
+}
+
+export interface SieveHooks {
+  /** Called when the grader request fails or times out (item then fails open). */
+  onGraderError?: (err: unknown) => void;
+  /** Do not wait for the grader at all (dim mode): its drops arrive through onLate. */
+  skipHold?: boolean;
+  /** Grader drops that finished after the batch was already returned (id -> reason). */
+  onLate?: (dropped: Map<string, string>) => void;
+}
+
+function graderDrops(verdicts: Map<string, GraderVerdict>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [id, v] of verdicts) {
+    if (v.verdict === "d") out.set(id, v.why ? `grader: ${v.why}` : "grader");
+  }
+  return out;
+}
+
+/** Drops with reasons: id -> reason. This is the one place a graded or rule drop is decided. */
+export async function runSieveDetailed(
+  items: FeedItem[],
+  config: SieveConfig,
+  seeds: SeedSets,
+  memory: MemoryStore,
+  fetchImpl: typeof fetch = fetch,
+  novelty?: NoveltyLookup,
+  hooks: SieveHooks = {},
+): Promise<Map<string, string>> {
+  const dropped = new Map<string, string>();
+  const uncertain: FeedItem[] = [];
+
+  for (const item of items) {
+    const decision = evaluateLocalDecision(item, config, seeds, memory, novelty);
+    if (decision.verdict === "drop") {
+      dropped.set(item.id, decision.reason);
+    } else if (decision.verdict === "uncertain") {
+      uncertain.push(item);
+    }
+  }
+
+  if (uncertain.length === 0 || config.grader.mode === "off") {
+    return dropped;
+  }
+
+  const holdMs = Math.max(50, config.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
+  const gradingPromise = gradeItemsDetailed(uncertain, config, fetchImpl)
+    .then(async (verdicts) => {
+      for (const item of uncertain) {
+        // Cache only what the model explicitly judged: "u", malformed and missing replies stay uncached.
+        const g = verdicts.get(item.id);
+        if (g?.verdict === "k") await memory.recordVerdict(item, "keep");
+        else if (g?.verdict === "d") {
+          await memory.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
+        }
+      }
+      return verdicts;
+    })
+    .catch((err: unknown) => {
+      hooks.onGraderError?.(err);
+      return new Map<string, GraderVerdict>();
+    });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("timeout");
+  const outcome = hooks.skipHold
+    ? timedOut
+    : await Promise.race([
+        gradingPromise,
+        new Promise<typeof timedOut>((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), holdMs);
+        }),
+      ]);
+  if (timer) clearTimeout(timer);
+
+  if (outcome === timedOut) {
+    // Too slow to wait for: deliver the grader's drops to the page when they arrive.
+    void gradingPromise.then((verdicts) => {
+      const late = graderDrops(verdicts);
+      if (late.size > 0) hooks.onLate?.(late);
+    });
+  } else {
+    for (const [id, reason] of graderDrops(outcome)) dropped.set(id, reason);
+  }
+
+  return dropped;
 }
 
 export async function runSieveOnBatch(
@@ -132,46 +242,5 @@ export async function runSieveOnBatch(
   fetchImpl: typeof fetch = fetch,
   novelty?: NoveltyLookup,
 ): Promise<Set<string>> {
-  const droppedIds = new Set<string>();
-  const uncertain: FeedItem[] = [];
-
-  for (const item of items) {
-    const localVerdict = evaluateLocalTiers(item, config, seeds, memory, novelty);
-    if (localVerdict === "drop") {
-      droppedIds.add(item.id);
-    } else if (localVerdict === "uncertain") {
-      uncertain.push(item);
-    }
-  }
-
-  if (uncertain.length === 0 || config.grader.mode === "off") {
-    return droppedIds;
-  }
-
-  const holdMs = Math.max(50, config.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
-  const gradingPromise = gradeItemsBatch(uncertain, config, fetchImpl)
-    .then(async (llmDrops) => {
-      for (const item of uncertain) {
-        const verdict: ResolvedVerdict = llmDrops.has(item.id) ? "drop" : "keep";
-        await memory.recordVerdict(item, verdict);
-      }
-      return llmDrops;
-    })
-    .catch(() => new Set<string>());
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = Symbol("timeout");
-  const outcome = await Promise.race([
-    gradingPromise,
-    new Promise<typeof timedOut>((resolve) => {
-      timer = setTimeout(() => resolve(timedOut), holdMs);
-    }),
-  ]);
-  if (timer) clearTimeout(timer);
-
-  if (outcome !== timedOut) {
-    for (const id of outcome) droppedIds.add(id);
-  }
-
-  return droppedIds;
+  return new Set((await runSieveDetailed(items, config, seeds, memory, fetchImpl, novelty)).keys());
 }

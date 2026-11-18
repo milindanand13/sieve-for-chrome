@@ -10,6 +10,7 @@ const outDir = path.join(rootDir, "extension", "dist");
 /** @type {ReadonlyArray<readonly [string, string]>} */
 const entries = [
   ["src/background/index.ts", "background.js"],
+  ["src/content/intercept.ts", "intercept.js"],
   ["src/content/youtube.ts", "content-youtube.js"],
   ["src/content/twitter.ts", "content-twitter.js"],
   ["src/content/instagram.ts", "content-instagram.js"],
@@ -27,7 +28,7 @@ async function main() {
         outfile: path.join(outDir, output),
         bundle: true,
         format: "iife",
-        target: ["firefox128"],
+        target: ["chrome120"],
         minify: false,
         legalComments: "none",
       }),

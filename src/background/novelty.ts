@@ -199,11 +199,16 @@ export function createNoveltyMemory(): NoveltyMemory {
   const entries: Array<{ id: string; tokenSet: Set<string>; at: number }> = [];
   const dbPromise = openNoveltyDb();
 
-  void dbPromise.then((db) => {
+  const ready: Promise<void> = dbPromise.then((db) => {
     if (!db) return;
     const now = Date.now();
+    return new Promise<void>((done) => {
     try {
-      const req = db.transaction("dwelled", "readonly").objectStore("dwelled").getAll();
+      const tx = db.transaction("dwelled", "readonly");
+      tx.oncomplete = () => done();
+      tx.onerror = () => done();
+      tx.onabort = () => done();
+      const req = tx.objectStore("dwelled").getAll();
       req.onsuccess = () => {
         if (!Array.isArray(req.result)) return;
         req.result
@@ -215,7 +220,9 @@ export function createNoveltyMemory(): NoveltyMemory {
       };
     } catch {
       // Ignore IDB errors in restricted contexts.
+      done();
     }
+    });
   });
 
   function pruneExpired(now: number): void {
@@ -240,6 +247,7 @@ export function createNoveltyMemory(): NoveltyMemory {
   }
 
   return {
+    ready,
     recordDwelled(text: string) {
       const tokenSet = extractSignatureTokens(text);
       if (tokenSet.size < MIN_SIGNATURE_TOKENS) return;

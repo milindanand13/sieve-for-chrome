@@ -15,9 +15,15 @@
 
 Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
+Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
+
+KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
+- photography
+- filmmaking and cinematography
+- media: journalism, criticism, and production
+- outdoor sports`;
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
-  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
+  var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var API_DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
   var API_DEFAULT_MODEL = "gemini-2.5-flash";
   var DEFAULT_CONFIG = {
@@ -50,7 +56,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       hideClutter: true
     },
     tiktok: {
-      enabled: true,
+      enabled: false,
       caliberFilter: true,
       cleanChrome: true,
       lightMode: true,
@@ -64,6 +70,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       rubric: DEFAULT_RUBRIC,
       streamHoldMs: 1500
     },
+    display: { hideDropped: false },
+    recorder: { enabled: false },
     allowHandles: [],
     blockHandles: []
   };
@@ -81,6 +89,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
     const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
+    const disp = isRecord(stored.display) ? stored.display : {};
+    const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
     const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
     return {
@@ -127,12 +137,142 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
+      display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
+      recorder: { enabled: bool(rec, "enabled", d.recorder.enabled) },
       allowHandles: readStringList(stored.allowHandles),
       blockHandles: readStringList(stored.blockHandles)
     };
   }
 
+  // src/background/fixtures.ts
+  var DB_NAME = "sieve_fixtures_v1";
+  var STORE = "samples";
+  function openDb() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { autoIncrement: true });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function done(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+  async function listFixtures() {
+    const db = await openDb();
+    const req = db.transaction(STORE, "readonly").objectStore(STORE).getAll();
+    const rows = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return rows;
+  }
+  async function clearFixtures() {
+    const db = await openDb();
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).clear();
+    await done(tx);
+    db.close();
+  }
+
+  // src/background/stats.ts
+  var STATS_KEY = "sieveStats";
+  var LOG_KEY = "sieveLog";
+  var DIAG_KEY = "sieveDiag";
+  var emptyCounts = () => ({ seen: 0, dimmed: 0, removed: 0, reasons: {} });
+  function dayKey(ms) {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  function sumStats(days, onlyDay) {
+    const out = {};
+    for (const [day, sites] of Object.entries(days)) {
+      if (onlyDay && day !== onlyDay) continue;
+      for (const [site, c] of Object.entries(sites)) {
+        const t = out[site] ??= emptyCounts();
+        t.seen += c.seen;
+        t.dimmed += c.dimmed;
+        t.removed += c.removed;
+        for (const [r, n] of Object.entries(c.reasons)) t.reasons[r] = (t.reasons[r] ?? 0) + n;
+      }
+    }
+    return out;
+  }
+  async function readStatsData(kv2) {
+    const raw = (await kv2.get(STATS_KEY))[STATS_KEY];
+    return isRecord(raw) ? raw : {};
+  }
+  async function readLogEntries(kv2) {
+    const raw = (await kv2.get(LOG_KEY))[LOG_KEY];
+    return Array.isArray(raw) ? raw : [];
+  }
+  async function readDiag(kv2) {
+    const raw = (await kv2.get(DIAG_KEY))[DIAG_KEY];
+    return { graderUnreachable: isRecord(raw) && typeof raw.graderUnreachable === "number" ? raw.graderUnreachable : 0 };
+  }
+
   // src/ui/options.ts
+  var kv = {
+    get: (key) => chrome.storage.local.get(key),
+    set: (items) => chrome.storage.local.set(items)
+  };
+  function cell(row, text, tag = "td") {
+    const c = document.createElement(tag);
+    c.textContent = text;
+    row.append(c);
+  }
+  function reasonText(c) {
+    return Object.entries(c.reasons).sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r} ${n}`).join(", ");
+  }
+  async function renderStats(table, diagEl) {
+    const data = await readStatsData(kv);
+    const today = sumStats(data, dayKey(Date.now()));
+    const all = sumStats(data);
+    table.replaceChildren();
+    const head = document.createElement("tr");
+    for (const h of ["site", "period", "seen", "dimmed", "%", "removed", "reasons"]) cell(head, h, "th");
+    table.append(head);
+    for (const site of ["youtube", "x", "instagram"]) {
+      for (const [label, src] of [["today", today], ["all time", all]]) {
+        const c = src[site];
+        if (!c) continue;
+        const row = document.createElement("tr");
+        cell(row, site);
+        cell(row, label);
+        cell(row, String(c.seen));
+        cell(row, String(c.dimmed));
+        cell(row, c.seen > 0 ? `${Math.round(c.dimmed / c.seen * 100)}%` : "0%");
+        cell(row, String(c.removed));
+        cell(row, reasonText(c));
+        table.append(row);
+      }
+    }
+    if (diagEl) {
+      const d = await readDiag(kv);
+      diagEl.textContent = `grader unreachable: ${d.graderUnreachable}`;
+    }
+  }
+  async function renderLog(table, site) {
+    const rows = (await readLogEntries(kv)).filter((e) => !site || e.site === site).slice(-200).reverse();
+    table.replaceChildren();
+    const head = document.createElement("tr");
+    for (const h of ["time", "site", "reason", "text"]) cell(head, h, "th");
+    table.append(head);
+    for (const e of rows) {
+      const row = document.createElement("tr");
+      cell(row, new Date(e.time).toLocaleString());
+      cell(row, e.site);
+      cell(row, e.reason);
+      cell(row, e.text);
+      table.append(row);
+    }
+  }
   function parseLines(raw) {
     return raw.split("\n").map((line) => line.trim()).filter(Boolean);
   }
@@ -147,9 +287,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     return el;
   }
   async function initOptions() {
-    const stored = await browser.storage.local.get("sieveConfig");
+    const stored = await chrome.storage.local.get("sieveConfig");
     const config = mergeConfig(stored.sieveConfig);
     const passFollowedEl = requireElement("pass-followed", HTMLInputElement);
+    const hideDroppedEl = requireElement("hide-dropped", HTMLInputElement);
+    const recorderEl = requireElement("recorder-enabled", HTMLInputElement);
     const noveltyFilterEl = requireElement("novelty-filter", HTMLInputElement);
     const modeEl = requireElement("grader-mode", HTMLSelectElement);
     const holdEl = requireElement("grader-hold", HTMLInputElement);
@@ -165,6 +307,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const statsEl = document.getElementById("memory-stats");
     function populateFields() {
       passFollowedEl.checked = config.passFollowed;
+      hideDroppedEl.checked = config.display.hideDropped;
+      recorderEl.checked = config.recorder.enabled;
       noveltyFilterEl.checked = config.noveltyFilter;
       modeEl.value = config.grader.mode;
       holdEl.value = String(config.grader.streamHoldMs);
@@ -176,10 +320,13 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       blockEl.value = config.blockHandles.join("\n");
     }
     let saveTimer;
-    function scheduleSave() {
+    function scheduleSave(immediate = false) {
       if (saveIndicator) saveIndicator.textContent = "saving...";
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
+        const rubricChanged = config.grader.rubric !== rubricEl.value;
+        config.display.hideDropped = hideDroppedEl.checked;
+        config.recorder.enabled = recorderEl.checked;
         config.passFollowed = passFollowedEl.checked;
         config.noveltyFilter = noveltyFilterEl.checked;
         config.grader.mode = parseGraderMode(modeEl.value);
@@ -193,10 +340,21 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         config.grader.rubric = rubricEl.value;
         config.allowHandles = parseLines(allowEl.value);
         config.blockHandles = parseLines(blockEl.value);
-        void browser.storage.local.set({ sieveConfig: config }).then(() => {
+        void chrome.storage.local.set({ sieveConfig: config }).then(() => {
           if (saveIndicator) saveIndicator.textContent = "saved locally";
+          if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {
+          });
         });
-      }, 180);
+      }, immediate ? 0 : 180);
+    }
+    async function ensureEndpointPermission() {
+      if (parseGraderMode(modeEl.value) !== "api") return true;
+      try {
+        const origin = `${new URL(endpointEl.value.trim()).origin}/*`;
+        return await chrome.permissions.request({ origins: [origin] });
+      } catch {
+        return false;
+      }
     }
     modeEl.addEventListener("change", () => {
       const nextMode = parseGraderMode(modeEl.value);
@@ -208,9 +366,16 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         modelEl.value = API_DEFAULT_MODEL;
       }
       scheduleSave();
+      if (nextMode === "api") {
+        void ensureEndpointPermission().then((ok) => {
+          if (!ok && testResult) testResult.textContent = "host permission not granted";
+        });
+      }
     });
     for (const el of [
       passFollowedEl,
+      hideDroppedEl,
+      recorderEl,
       noveltyFilterEl,
       holdEl,
       endpointEl,
@@ -220,18 +385,23 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       allowEl,
       blockEl
     ]) {
-      el.addEventListener("input", scheduleSave);
-      el.addEventListener("change", scheduleSave);
+      el.addEventListener("input", () => scheduleSave());
+      el.addEventListener("change", () => scheduleSave());
     }
+    document.getElementById("save-rubric")?.addEventListener("click", () => scheduleSave(true));
     document.getElementById("reset-rubric")?.addEventListener("click", () => {
       rubricEl.value = DEFAULT_RUBRIC;
-      scheduleSave();
+      scheduleSave(true);
     });
     testBtn.addEventListener("click", async () => {
       testBtn.disabled = true;
       if (testResult) testResult.textContent = "testing...";
       try {
-        const res = await browser.runtime.sendMessage({
+        if (!await ensureEndpointPermission()) {
+          if (testResult) testResult.textContent = "host permission not granted";
+          return;
+        }
+        const res = await chrome.runtime.sendMessage({
           type: "TEST_GRADER",
           graderOverride: {
             mode: parseGraderMode(modeEl.value),
@@ -260,7 +430,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     async function refreshStats() {
       if (!statsEl) return;
       try {
-        const s = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+        const s = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
         if (!isRecord(s)) return;
         const hnVideos = typeof s.hnVideos === "number" ? s.hnVideos : 0;
         const slopChannels = typeof s.slopChannels === "number" ? s.slopChannels : 0;
@@ -273,11 +443,52 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       }
     }
     document.getElementById("clear-cache")?.addEventListener("click", async () => {
-      await browser.runtime.sendMessage({ type: "CLEAR_CACHE" });
+      await chrome.runtime.sendMessage({ type: "CLEAR_CACHE" });
       await refreshStats();
+    });
+    const statsTable = requireElement("stats-table", HTMLTableElement);
+    const logTable = requireElement("log-table", HTMLTableElement);
+    const logSite = requireElement("log-site", HTMLSelectElement);
+    const diagEl = document.getElementById("diag-line");
+    const samplesNote = document.getElementById("samples-note");
+    const refreshTables = async () => {
+      await renderStats(statsTable, diagEl);
+      await renderLog(logTable, logSite.value);
+    };
+    document.getElementById("reset-counts")?.addEventListener("click", async () => {
+      await chrome.storage.local.remove([STATS_KEY, DIAG_KEY]);
+      await refreshTables();
+    });
+    document.getElementById("clear-log")?.addEventListener("click", async () => {
+      await chrome.storage.local.remove(LOG_KEY);
+      await refreshTables();
+    });
+    logSite.addEventListener("change", () => void renderLog(logTable, logSite.value));
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && (changes[STATS_KEY] || changes[LOG_KEY] || changes[DIAG_KEY])) {
+        void refreshTables();
+      }
+    });
+    document.getElementById("export-samples")?.addEventListener("click", async () => {
+      const rows = await listFixtures();
+      if (samplesNote) samplesNote.textContent = `${rows.length} samples`;
+      if (rows.length === 0) return;
+      const blob = new Blob([JSON.stringify(rows.map(({ site, url, body }) => ({ site, url, body })))], {
+        type: "application/json"
+      });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "sieve-samples.json";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1e4);
+    });
+    document.getElementById("clear-samples")?.addEventListener("click", async () => {
+      await clearFixtures();
+      if (samplesNote) samplesNote.textContent = "cleared";
     });
     populateFields();
     await refreshStats();
+    await refreshTables();
   }
   void initOptions();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {

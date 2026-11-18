@@ -3,8 +3,10 @@ import { isRecord, type FeedItem, type JsonRecord, type SieveConfig } from "../t
 const MAX_BATCH_SIZE = 20;
 const BACKGROUND_TIMEOUT_MS = 6000;
 
-function extractJsonObject(raw: string): JsonRecord | null {
-  if (!raw) return null;
+function extractJsonObject(rawInput: string): JsonRecord | null {
+  // qwen3.x may emit reasoning first; drop closed and unterminated <think> blocks.
+  const raw = rawInput.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "");
+  if (!raw.trim()) return null;
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
   const candidate = (fenced?.[1] ?? raw).trim();
   const braceStart = candidate.indexOf("{");
@@ -19,31 +21,71 @@ function extractJsonObject(raw: string): JsonRecord | null {
   }
 }
 
-export function parseIndexedVerdicts(raw: string, orderedIds: string[]): Set<string> {
-  const dropped = new Set<string>();
+export type GraderLetter = "k" | "u" | "d";
+export interface GraderVerdict {
+  verdict: GraderLetter;
+  /** Short label from the model, only on drops. */
+  why?: string;
+}
+
+function cleanWhy(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.replace(/\s+/g, " ").trim().slice(0, 40);
+  return t || undefined;
+}
+
+/**
+ * Parses a grader reply into explicit per-id verdicts. Only ids the model actually judged
+ * appear: empty or malformed replies give an empty map, and "u" is never treated as keep.
+ * Accepts {"drop":[...],"unsure":[...],"why":{...}} (ids or indexes) and {"0":"k|u|d"}.
+ */
+export function parseVerdictMap(raw: string, orderedIds: string[]): Map<string, GraderVerdict> {
+  const out = new Map<string, GraderVerdict>();
   const parsed = extractJsonObject(raw);
-  if (!parsed) return dropped;
+  if (!parsed) return out;
 
   const validSet = new Set(orderedIds);
+  const resolve = (ref: unknown): string | undefined => {
+    const key = typeof ref === "number" ? String(ref) : ref;
+    if (typeof key !== "string") return undefined;
+    if (validSet.has(key)) return key;
+    return /^\d+$/.test(key) ? orderedIds[Number.parseInt(key, 10)] : undefined;
+  };
+  const why = isRecord(parsed.why) ? parsed.why : {};
+  const whyFor = (ref: unknown, id: string): string | undefined =>
+    cleanWhy(why[id]) ?? cleanWhy(typeof ref === "string" || typeof ref === "number" ? why[String(ref)] : undefined);
+
   if (Array.isArray(parsed.drop)) {
-    for (const id of parsed.drop) {
-      if (typeof id === "string" && validSet.has(id)) dropped.add(id);
+    for (const ref of parsed.drop) {
+      const id = resolve(ref);
+      if (id) out.set(id, { verdict: "d", why: whyFor(ref, id) });
     }
-    return dropped;
+    if (Array.isArray(parsed.unsure)) {
+      for (const ref of parsed.unsure) {
+        const id = resolve(ref);
+        if (id && !out.has(id)) out.set(id, { verdict: "u" });
+      }
+    }
+    // Listed as neither drop nor unsure: the model judged it keep.
+    for (const id of orderedIds) if (!out.has(id)) out.set(id, { verdict: "k" });
+    return out;
   }
 
   for (const [key, val] of Object.entries(parsed)) {
     if (typeof val !== "string") continue;
     const v = val.trim().toLowerCase();
-    if (v !== "d" && v !== "drop") continue;
-
-    if (/^\d+$/.test(key)) {
-      const mappedId = orderedIds[Number.parseInt(key, 10)];
-      if (mappedId) dropped.add(mappedId);
-    } else if (validSet.has(key)) {
-      dropped.add(key);
-    }
+    const id = resolve(key);
+    if (!id) continue;
+    if (v === "d" || v === "drop") out.set(id, { verdict: "d", why: whyFor(key, id) });
+    else if (v === "k" || v === "keep") out.set(id, { verdict: "k" });
+    else if (v === "u") out.set(id, { verdict: "u" });
   }
+  return out;
+}
+
+export function parseIndexedVerdicts(raw: string, orderedIds: string[]): Set<string> {
+  const dropped = new Set<string>();
+  for (const [id, v] of parseVerdictMap(raw, orderedIds)) if (v.verdict === "d") dropped.add(id);
   return dropped;
 }
 
@@ -63,7 +105,9 @@ const VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with on
 - "u" = unsure or neutral (kept by default when in doubt)
 - "d" = confident drop (ONLY clear ragebait, public humiliation/dunk clips, political/culture-war outrage, celebrity/influencer gossip, crypto/memecoin shills, hustle-bro/DM-funnel bait, short-drama cliffhangers, or AI voiceover sleep-slop)
 
-Return ONLY a JSON object mapping every index to "k", "u", or "d", like {"0":"k","1":"u","2":"d"}.`;
+Return ONLY a JSON object listing the indexes of confident drops, optional unsure indexes, and a 2-4 word label for each drop, like:
+{"drop":["2"],"unsure":["1"],"why":{"2":"outrage bait"}}
+Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`;
 
 function readFirstChoiceContent(body: unknown): string {
   if (!isRecord(body) || !Array.isArray(body.choices)) return "";
@@ -77,7 +121,38 @@ export async function gradeItemsBatch(
   config: SieveConfig,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Set<string>> {
-  if (config.grader.mode === "off" || items.length === 0) return new Set();
+  const verdicts = await gradeItemsDetailed(items, config, fetchImpl);
+  const dropped = new Set<string>();
+  for (const [id, v] of verdicts) if (v.verdict === "d") dropped.add(id);
+  return dropped;
+}
+
+/** Grades any number of items in sequential chunks of 20. A failure after the first chunk keeps earlier verdicts. */
+export async function gradeItemsDetailed(
+  items: FeedItem[],
+  config: SieveConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Map<string, GraderVerdict>> {
+  const out = new Map<string, GraderVerdict>();
+  for (let i = 0; i < items.length; i += MAX_BATCH_SIZE) {
+    try {
+      for (const [id, v] of await gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config, fetchImpl)) {
+        out.set(id, v);
+      }
+    } catch (err) {
+      if (out.size === 0) throw err;
+      break;
+    }
+  }
+  return out;
+}
+
+async function gradeChunk(
+  items: FeedItem[],
+  config: SieveConfig,
+  fetchImpl: typeof fetch,
+): Promise<Map<string, GraderVerdict>> {
+  if (config.grader.mode === "off" || items.length === 0) return new Map();
   if (!config.grader.endpoint || !config.grader.model) {
     throw new Error("Missing grader endpoint or model");
   }
@@ -85,7 +160,7 @@ export async function gradeItemsBatch(
     throw new Error("Missing API key");
   }
 
-  const batch = items.slice(0, MAX_BATCH_SIZE);
+  const batch = items;
   const orderedIds = batch.map((item) => item.id);
 
   const controller = new AbortController();
@@ -112,6 +187,8 @@ export async function gradeItemsBatch(
           ? {
               seed: 42,
               keep_alive: "30m",
+              // Ollama: turn off qwen3.x reasoning output. Unknown fields are ignored by servers.
+              reasoning_effort: "none", // Ollama /v1 ignores think:false (8s); this gives ~0.25s
               response_format: { type: "json_object" },
             }
           : {}),
@@ -132,7 +209,7 @@ export async function gradeItemsBatch(
       throw new Error(`HTTP ${res.status}`);
     }
     const body: unknown = await res.json();
-    return parseIndexedVerdicts(readFirstChoiceContent(body), orderedIds);
+    return parseVerdictMap(readFirstChoiceContent(body), orderedIds);
   } finally {
     clearTimeout(timer);
   }

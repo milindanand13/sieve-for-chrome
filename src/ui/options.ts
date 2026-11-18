@@ -7,7 +7,82 @@ import {
   LOCAL_DEFAULT_MODEL,
   mergeConfig,
 } from "../defaults.js";
-import { isRecord, type GraderMode, type SieveConfig } from "../types.js";
+import { clearFixtures, listFixtures } from "../background/fixtures.js";
+import {
+  DIAG_KEY,
+  LOG_KEY,
+  STATS_KEY,
+  dayKey,
+  readDiag,
+  readLogEntries,
+  readStatsData,
+  sumStats,
+  type Counts,
+} from "../background/stats.js";
+import { isRecord, type GraderMode, type Platform, type SieveConfig } from "../types.js";
+
+const kv = {
+  get: (key: string) => chrome.storage.local.get(key),
+  set: (items: Record<string, unknown>) => chrome.storage.local.set(items),
+};
+
+function cell(row: HTMLTableRowElement, text: string, tag: "td" | "th" = "td"): void {
+  const c = document.createElement(tag);
+  c.textContent = text;
+  row.append(c);
+}
+
+function reasonText(c: Counts): string {
+  return Object.entries(c.reasons)
+    .sort((a, b) => b[1] - a[1])
+    .map(([r, n]) => `${r} ${n}`)
+    .join(", ");
+}
+
+async function renderStats(table: HTMLElement, diagEl: HTMLElement | null): Promise<void> {
+  const data = await readStatsData(kv);
+  const today = sumStats(data, dayKey(Date.now()));
+  const all = sumStats(data);
+  table.replaceChildren();
+  const head = document.createElement("tr");
+  for (const h of ["site", "period", "seen", "dimmed", "%", "removed", "reasons"]) cell(head, h, "th");
+  table.append(head);
+  for (const site of ["youtube", "x", "instagram"] as Platform[]) {
+    for (const [label, src] of [["today", today], ["all time", all]] as const) {
+      const c = src[site];
+      if (!c) continue;
+      const row = document.createElement("tr");
+      cell(row, site);
+      cell(row, label);
+      cell(row, String(c.seen));
+      cell(row, String(c.dimmed));
+      cell(row, c.seen > 0 ? `${Math.round((c.dimmed / c.seen) * 100)}%` : "0%");
+      cell(row, String(c.removed));
+      cell(row, reasonText(c));
+      table.append(row);
+    }
+  }
+  if (diagEl) {
+    const d = await readDiag(kv);
+    diagEl.textContent = `grader unreachable: ${d.graderUnreachable}`;
+  }
+}
+
+async function renderLog(table: HTMLElement, site: string): Promise<void> {
+  const rows = (await readLogEntries(kv)).filter((e) => !site || e.site === site).slice(-200).reverse();
+  table.replaceChildren();
+  const head = document.createElement("tr");
+  for (const h of ["time", "site", "reason", "text"]) cell(head, h, "th");
+  table.append(head);
+  for (const e of rows) {
+    const row = document.createElement("tr");
+    cell(row, new Date(e.time).toLocaleString());
+    cell(row, e.site);
+    cell(row, e.reason);
+    cell(row, e.text);
+    table.append(row);
+  }
+}
 
 function parseLines(raw: string): string[] {
   return raw
@@ -32,10 +107,12 @@ function requireElement<T extends HTMLElement>(
 }
 
 async function initOptions(): Promise<void> {
-  const stored = await browser.storage.local.get("sieveConfig");
+  const stored = await chrome.storage.local.get("sieveConfig");
   const config: SieveConfig = mergeConfig(stored.sieveConfig);
 
   const passFollowedEl = requireElement("pass-followed", HTMLInputElement);
+  const hideDroppedEl = requireElement("hide-dropped", HTMLInputElement);
+  const recorderEl = requireElement("recorder-enabled", HTMLInputElement);
   const noveltyFilterEl = requireElement("novelty-filter", HTMLInputElement);
   const modeEl = requireElement("grader-mode", HTMLSelectElement);
   const holdEl = requireElement("grader-hold", HTMLInputElement);
@@ -52,6 +129,8 @@ async function initOptions(): Promise<void> {
 
   function populateFields(): void {
     passFollowedEl.checked = config.passFollowed;
+    hideDroppedEl.checked = config.display.hideDropped;
+    recorderEl.checked = config.recorder.enabled;
     noveltyFilterEl.checked = config.noveltyFilter;
     modeEl.value = config.grader.mode;
     holdEl.value = String(config.grader.streamHoldMs);
@@ -64,10 +143,14 @@ async function initOptions(): Promise<void> {
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  function scheduleSave(): void {
+  function scheduleSave(immediate = false): void {
     if (saveIndicator) saveIndicator.textContent = "saving...";
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
+      // Old verdicts were graded under the old rubric, so drop them when it changes.
+      const rubricChanged = config.grader.rubric !== rubricEl.value;
+      config.display.hideDropped = hideDroppedEl.checked;
+      config.recorder.enabled = recorderEl.checked;
       config.passFollowed = passFollowedEl.checked;
       config.noveltyFilter = noveltyFilterEl.checked;
       config.grader.mode = parseGraderMode(modeEl.value);
@@ -82,10 +165,22 @@ async function initOptions(): Promise<void> {
       config.allowHandles = parseLines(allowEl.value);
       config.blockHandles = parseLines(blockEl.value);
 
-      void browser.storage.local.set({ sieveConfig: config }).then(() => {
+      void chrome.storage.local.set({ sieveConfig: config }).then(() => {
         if (saveIndicator) saveIndicator.textContent = "saved locally";
+        if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {});
       });
-    }, 180);
+    }, immediate ? 0 : 180);
+  }
+
+  // Cloud hosts are optional_host_permissions; ask on a user gesture. Local hosts are granted already.
+  async function ensureEndpointPermission(): Promise<boolean> {
+    if (parseGraderMode(modeEl.value) !== "api") return true;
+    try {
+      const origin = `${new URL(endpointEl.value.trim()).origin}/*`;
+      return await chrome.permissions.request({ origins: [origin] });
+    } catch {
+      return false;
+    }
   }
 
   modeEl.addEventListener("change", () => {
@@ -98,10 +193,17 @@ async function initOptions(): Promise<void> {
       modelEl.value = API_DEFAULT_MODEL;
     }
     scheduleSave();
+    if (nextMode === "api") {
+      void ensureEndpointPermission().then((ok) => {
+        if (!ok && testResult) testResult.textContent = "host permission not granted";
+      });
+    }
   });
 
   for (const el of [
     passFollowedEl,
+    hideDroppedEl,
+    recorderEl,
     noveltyFilterEl,
     holdEl,
     endpointEl,
@@ -111,20 +213,26 @@ async function initOptions(): Promise<void> {
     allowEl,
     blockEl,
   ]) {
-    el.addEventListener("input", scheduleSave);
-    el.addEventListener("change", scheduleSave);
+    el.addEventListener("input", () => scheduleSave());
+    el.addEventListener("change", () => scheduleSave());
   }
+
+  document.getElementById("save-rubric")?.addEventListener("click", () => scheduleSave(true));
 
   document.getElementById("reset-rubric")?.addEventListener("click", () => {
     rubricEl.value = DEFAULT_RUBRIC;
-    scheduleSave();
+    scheduleSave(true);
   });
 
   testBtn.addEventListener("click", async () => {
     testBtn.disabled = true;
     if (testResult) testResult.textContent = "testing...";
     try {
-      const res: unknown = await browser.runtime.sendMessage({
+      if (!(await ensureEndpointPermission())) {
+        if (testResult) testResult.textContent = "host permission not granted";
+        return;
+      }
+      const res: unknown = await chrome.runtime.sendMessage({
         type: "TEST_GRADER",
         graderOverride: {
           mode: parseGraderMode(modeEl.value),
@@ -155,7 +263,7 @@ async function initOptions(): Promise<void> {
   async function refreshStats(): Promise<void> {
     if (!statsEl) return;
     try {
-      const s: unknown = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+      const s: unknown = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
       if (!isRecord(s)) return;
       const hnVideos = typeof s.hnVideos === "number" ? s.hnVideos : 0;
       const slopChannels = typeof s.slopChannels === "number" ? s.slopChannels : 0;
@@ -169,12 +277,56 @@ async function initOptions(): Promise<void> {
   }
 
   document.getElementById("clear-cache")?.addEventListener("click", async () => {
-    await browser.runtime.sendMessage({ type: "CLEAR_CACHE" });
+    await chrome.runtime.sendMessage({ type: "CLEAR_CACHE" });
     await refreshStats();
+  });
+
+  const statsTable = requireElement("stats-table", HTMLTableElement);
+  const logTable = requireElement("log-table", HTMLTableElement);
+  const logSite = requireElement("log-site", HTMLSelectElement);
+  const diagEl = document.getElementById("diag-line");
+  const samplesNote = document.getElementById("samples-note");
+  const refreshTables = async (): Promise<void> => {
+    await renderStats(statsTable, diagEl);
+    await renderLog(logTable, logSite.value);
+  };
+
+  document.getElementById("reset-counts")?.addEventListener("click", async () => {
+    await chrome.storage.local.remove([STATS_KEY, DIAG_KEY]);
+    await refreshTables();
+  });
+  document.getElementById("clear-log")?.addEventListener("click", async () => {
+    await chrome.storage.local.remove(LOG_KEY);
+    await refreshTables();
+  });
+  logSite.addEventListener("change", () => void renderLog(logTable, logSite.value));
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && (changes[STATS_KEY] || changes[LOG_KEY] || changes[DIAG_KEY])) {
+      void refreshTables();
+    }
+  });
+
+  document.getElementById("export-samples")?.addEventListener("click", async () => {
+    const rows = await listFixtures();
+    if (samplesNote) samplesNote.textContent = `${rows.length} samples`;
+    if (rows.length === 0) return;
+    const blob = new Blob([JSON.stringify(rows.map(({ site, url, body }) => ({ site, url, body })))], {
+      type: "application/json",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "sieve-samples.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  });
+  document.getElementById("clear-samples")?.addEventListener("click", async () => {
+    await clearFixtures();
+    if (samplesNote) samplesNote.textContent = "cleared";
   });
 
   populateFields();
   await refreshStats();
+  await refreshTables();
 }
 
 void initOptions();

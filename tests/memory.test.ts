@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMemoryStore } from "../src/background/memory.js";
 import type { FeedItem } from "../src/types.js";
 
@@ -23,8 +23,9 @@ describe("createMemoryStore", () => {
 
     await store.recordVerdict(makeItem("v3", "@GoodMaker"), "keep");
     expect(store.getCreatorVerdict("youtube", "goodmaker")).toBe("keep");
-    expect(store.getCreatorVerdict("instagram", "goodmaker")).toBe("keep");
-    expect(store.getCreatorVerdict("tiktok", "goodmaker")).toBe("keep");
+    // Creator memory is per site: a YouTube verdict never applies to other sites.
+    expect(store.getCreatorVerdict("instagram", "goodmaker")).toBeUndefined();
+    expect(store.getCreatorVerdict("tiktok", "goodmaker")).toBeUndefined();
   });
 
   it("promotes consistently low-caliber creators to drop after 5 drops and leaves mixed creators unpromoted", async () => {
@@ -59,5 +60,16 @@ describe("createMemoryStore", () => {
     await store.clear();
     expect(store.getItemVerdict("youtube", "c")).toBeUndefined();
     expect(store.counts().cachedItems).toBe(0);
+  });
+
+  it("expires grader verdicts after 30 days but never the user's own", async () => {
+    vi.useFakeTimers();
+    const store = createMemoryStore();
+    await store.recordVerdict(makeItem("g", "@A"), "drop", "grader");
+    await store.recordVerdict(makeItem("u", "@B"), "keep", "you: keep");
+    vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000);
+    expect(store.getItemVerdict("youtube", "g")).toBeUndefined();
+    expect(store.getItemVerdict("youtube", "u")).toBe("keep");
+    vi.useRealTimers();
   });
 });

@@ -38,6 +38,20 @@
     </label>
   </div>
 
+  <h2 class="section-title">display</h2>
+  <div class="card">
+    <label class="row">
+      <span>
+        <span class="row-label">hide dropped items entirely</span>
+        <span class="row-sub">off: dropped items stay in the feed, dimmed with a reason label</span>
+      </span>
+      <span class="switch">
+        <input type="checkbox" id="hide-dropped">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </span>
+    </label>
+  </div>
+
   <h2 class="section-title">tier 2 grader</h2>
   <div class="card">
     <div class="grid-2">
@@ -81,10 +95,12 @@
   <div class="card">
     <div class="field">
       <label for="grader-rubric">instructions sent to tier 2 batch grader</label>
-      <textarea id="grader-rubric" rows="6"></textarea>
+      <textarea id="grader-rubric" rows="14"></textarea>
     </div>
     <div class="actions-row">
+      <button type="button" class="btn" id="save-rubric">save</button>
       <button type="button" class="btn" id="reset-rubric">reset to default</button>
+      <span class="status-note">edits apply to new grader batches; saving clears old cached verdicts</span>
     </div>
   </div>
 
@@ -107,6 +123,48 @@
     <div class="actions-row" style="justify-content: space-between;">
       <span class="status-note" id="memory-stats">loading stats...</span>
       <button type="button" class="btn" id="clear-cache">clear verdict cache</button>
+    </div>
+  </div>
+
+  <h2 class="section-title">stats</h2>
+  <div class="card">
+    <table class="data-table" id="stats-table"></table>
+    <div class="actions-row" style="justify-content: space-between;">
+      <span class="status-note" id="diag-line"></span>
+      <button type="button" class="btn" id="reset-counts">reset counts</button>
+    </div>
+  </div>
+
+  <h2 class="section-title">drop log</h2>
+  <div class="card">
+    <div class="actions-row">
+      <select id="log-site">
+        <option value="">all sites</option>
+        <option value="youtube">youtube</option>
+        <option value="x">x</option>
+        <option value="instagram">instagram</option>
+      </select>
+      <button type="button" class="btn" id="clear-log">clear log</button>
+    </div>
+    <table class="data-table" id="log-table"></table>
+  </div>
+
+  <h2 class="section-title">developer</h2>
+  <div class="card">
+    <label class="row">
+      <span>
+        <span class="row-label">Record samples for tests</span>
+        <span class="row-sub">keeps up to 60 raw feed responses (25 per site) on this device (feed text, no cookies)</span>
+      </span>
+      <span class="switch">
+        <input type="checkbox" id="recorder-enabled">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </span>
+    </label>
+    <div class="actions-row">
+      <button type="button" class="btn" id="export-samples">Export samples</button>
+      <button type="button" class="btn" id="clear-samples">Clear samples</button>
+      <span class="status-note" id="samples-note"></span>
     </div>
   </div>
 

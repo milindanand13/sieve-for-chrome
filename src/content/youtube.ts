@@ -7,8 +7,11 @@ import {
   createDwellTracker,
   createRafScheduler,
   evaluateDomBatch,
+  installDimMarker,
   installMidFrameThumbFallback,
+  markCard,
   rememberBounded,
+  rememberDim,
 } from "./shared.js";
 
 const AI_BUTTON_RE = /\bgemini\b|\bask\s+youtube\b|\bsearch\s+with\s+ai\b|\bask\s+ai\b|^ask$/i;
@@ -56,7 +59,7 @@ async function resolveVagueDomTitles(): Promise<void> {
   if (titleElsByVid.size === 0) return;
 
   try {
-    const res: unknown = await browser.runtime.sendMessage({
+    const res: unknown = await chrome.runtime.sendMessage({
       type: "RESOLVE_DEARROW_TITLES",
       videoIds: [...titleElsByVid.keys()].slice(0, 16),
     });
@@ -152,9 +155,10 @@ async function evaluateUnfilteredDomCards(): Promise<void> {
     });
   });
 
-  await evaluateDomBatch(batch, (id) => {
+  await evaluateDomBatch(batch, (id, reason) => {
+    rememberDim(id, reason);
     const card = cardById.get(id);
-    if (card) card.dataset.sieveYtDropped = "1";
+    if (card) markCard(card, reason);
   });
 }
 
@@ -232,6 +236,24 @@ function handleNavigationChange(): void {
   enforceRouteGuards();
   schedulePolish();
 }
+
+function youtubeVideoId(card: HTMLElement): string {
+  const link = card.querySelector<HTMLAnchorElement>('a[href*="/watch?v="]');
+  if (!link) return "";
+  try {
+    return new URL(link.href, window.location.origin).searchParams.get("v") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+installDimMarker({
+  cards: () =>
+    document.querySelectorAll<HTMLElement>(
+      "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",
+    ),
+  idsOf: (card) => [youtubeVideoId(card)],
+});
 
 bootSiteAdapter((cfg) => {
   activeConfig = cfg;

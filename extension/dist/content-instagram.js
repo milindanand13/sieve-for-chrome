@@ -248,9 +248,15 @@
 
 Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
+Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
+
+KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
+- photography
+- filmmaking and cinematography
+- media: journalism, criticism, and production
+- outdoor sports`;
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
-  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
+  var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
     schemaVersion: SCHEMA_VERSION,
     enabled: true,
@@ -281,7 +287,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       hideClutter: true
     },
     tiktok: {
-      enabled: true,
+      enabled: false,
       caliberFilter: true,
       cleanChrome: true,
       lightMode: true,
@@ -295,6 +301,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       rubric: DEFAULT_RUBRIC,
       streamHoldMs: 1500
     },
+    display: { hideDropped: false },
+    recorder: { enabled: false },
     allowHandles: [],
     blockHandles: []
   };
@@ -312,6 +320,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
     const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
+    const disp = isRecord(stored.display) ? stored.display : {};
+    const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
     const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
     return {
@@ -358,10 +368,36 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
+      display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
+      recorder: { enabled: bool(rec, "enabled", d.recorder.enabled) },
       allowHandles: readStringList(stored.allowHandles),
       blockHandles: readStringList(stored.blockHandles)
     };
   }
+
+  // src/shared/intercept.ts
+  var INTERCEPT_TAG = "sieve-intercept-v1";
+  var MAX_STREAM_BYTES = 12 * 1024 * 1024;
+  var INTERCEPT_URLS = [
+    "https://www.youtube.com/youtubei/v1/browse*",
+    "https://www.youtube.com/youtubei/v1/next*",
+    "https://www.youtube.com/youtubei/v1/search*",
+    "https://m.youtube.com/youtubei/v1/browse*",
+    "https://m.youtube.com/youtubei/v1/next*",
+    "https://m.youtube.com/youtubei/v1/search*",
+    "https://x.com/i/api/graphql/*",
+    "https://twitter.com/i/api/graphql/*",
+    "https://www.instagram.com/graphql/query*",
+    "https://www.instagram.com/api/v1/clips/home/*",
+    "https://www.instagram.com/api/v1/feed/timeline/*",
+    "https://i.instagram.com/api/v1/clips/home/*",
+    "https://i.instagram.com/api/v1/feed/timeline/*",
+    "https://www.tiktok.com/api/recommend/item_list/*",
+    "https://www.tiktok.com/api/post/item_list/*"
+  ];
+  var INTERCEPT_RES = INTERCEPT_URLS.map(
+    (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
+  );
 
   // src/content/shared.ts
   var LOCAL_CACHE_KEY = "__sieve_cached_flags_v1";
@@ -395,7 +431,110 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     } catch {
     }
   }
+  var relayInstalled = false;
+  function installInterceptRelay() {
+    if (relayInstalled) return;
+    relayInstalled = true;
+    window.addEventListener("message", (event) => {
+      if (event.source !== window) return;
+      const d = event.data;
+      if (!isRecord(d) || d.tag !== INTERCEPT_TAG || d.dir !== "req" || typeof d.id !== "string") {
+        return;
+      }
+      const id = d.id;
+      const reply = (body) => window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
+      chrome.runtime.sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body }).then((res) => {
+        if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed);
+        reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
+      }).catch(() => reply(null));
+    });
+  }
+  var dimReasons = /* @__PURE__ */ new Map();
+  var DIM_CAP = 1500;
+  var dimSite;
+  function markCard(card, reason, direct = false) {
+    if (isKept(card)) return;
+    if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
+    if (direct) card.dataset.sieveDimDirect = "1";
+    if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
+  }
+  function unmarkCard(card) {
+    delete card.dataset.sieveDim;
+    delete card.dataset.sieveDimReason;
+  }
+  var keptIds = /* @__PURE__ */ new Set();
+  var isKept = (card) => !!dimSite?.idsOf(card).some((id) => keptIds.has(id));
+  function rememberDim(id, reason) {
+    if (!id) return;
+    if (!dimReasons.has(id) && dimReasons.size >= DIM_CAP) {
+      dimReasons.delete(dimReasons.keys().next().value);
+    }
+    dimReasons.set(id, reason);
+  }
+  function scanDims() {
+    if (!dimSite) return;
+    for (const card of dimSite.cards()) {
+      const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
+      if (isKept(card)) continue;
+      if (reason) markCard(card, reason);
+      else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
+    }
+  }
+  var scheduleDimScan = createRafScheduler(scanDims);
+  function registerDimmed(entries) {
+    for (const e of entries) {
+      rememberDim(e.id, e.reason);
+      if (e.alt) rememberDim(e.alt, e.reason);
+    }
+    scheduleDimScan();
+  }
+  function installDimMarker(site) {
+    dimSite = site;
+    const observe = () => {
+      new MutationObserver(scheduleDimScan).observe(document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+      scheduleDimScan();
+    };
+    if (document.documentElement) observe();
+    else document.addEventListener("DOMContentLoaded", observe, { once: true });
+  }
   function bootSiteAdapter(onConfig) {
+    installInterceptRelay();
+    chrome.runtime.onMessage.addListener((msg, sender) => {
+      if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
+      if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed);
+    });
+    let lastContext = null;
+    document.addEventListener("contextmenu", (e) => lastContext = e.target, true);
+    chrome.runtime.onMessage.addListener((msg, sender) => {
+      if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
+      const action = msg.action;
+      if (!dimSite || !(lastContext instanceof Node) || typeof action !== "string") return;
+      const card = [...dimSite.cards()].find((c) => c.contains(lastContext));
+      if (!card) return;
+      const ids = dimSite.idsOf(card);
+      const keep = action === "keep" || action === "keepCreator";
+      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text: (card.innerText || "").slice(0, 300) }).then((res) => {
+        if (!isRecord(res) || res.ok !== true) return;
+        if (keep) {
+          ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
+          unmarkCard(card);
+          delete card.dataset.sieveDimDirect;
+        } else {
+          ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
+          markCard(card, "you: slop");
+        }
+      }).catch(() => void 0);
+    });
+    const baseOnConfig = onConfig;
+    onConfig = (cfg) => {
+      if (document.documentElement) {
+        document.documentElement.dataset.sieveHide = cfg.display.hideDropped ? "1" : "0";
+      }
+      baseOnConfig(cfg);
+    };
     const cached = readCachedFlags();
     if (document.documentElement) {
       for (const [k, v] of Object.entries(cached)) {
@@ -403,13 +542,13 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       }
     }
     let current = structuredClone(DEFAULT_CONFIG);
-    void browser.storage.local.get("sieveConfig").then((stored) => {
+    void chrome.storage.local.get("sieveConfig").then((stored) => {
       current = mergeConfig(stored.sieveConfig);
       onConfig(current);
     }).catch(() => {
       onConfig(current);
     });
-    browser.storage.onChanged.addListener((changes, area) => {
+    chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes.sieveConfig) {
         current = mergeConfig(changes.sieveConfig.newValue);
         onConfig(current);
@@ -439,13 +578,17 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
   async function evaluateDomBatch(items, onDrop) {
     if (items.length === 0) return;
     try {
-      const res = await browser.runtime.sendMessage({
+      const res = await chrome.runtime.sendMessage({
         type: "EVALUATE_SSR_ITEMS",
         items
       });
       if (!isRecord(res) || !Array.isArray(res.dropped)) return;
+      const reasons = isRecord(res.reasons) ? res.reasons : {};
       for (const id of res.dropped) {
-        if (typeof id === "string") onDrop(id);
+        if (typeof id === "string") {
+          const r = reasons[id];
+          onDrop(id, typeof r === "string" ? r : "dropped");
+        }
       }
     } catch {
     }
@@ -559,12 +702,10 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         titleOrText: text
       });
     });
-    await evaluateDomBatch(batch, (dropId) => {
+    await evaluateDomBatch(batch, (dropId, reason) => {
+      rememberDim(dropId, reason);
       const article = articleById.get(dropId);
-      if (article) {
-        article.dataset.sieveHidden = "1";
-        pauseAllMedia(article);
-      }
+      if (article) markCard(article, reason, !dropId.startsWith("/"));
     });
   }
   function sweepInstagramDom() {
@@ -601,6 +742,15 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     void evaluateUnfollowedHomeArticles(main);
   }
   var scheduleSweep = createRafScheduler(sweepInstagramDom);
+  function instagramPostRefs(article) {
+    const href = article.querySelector('a[href^="/p/"], a[href^="/reel/"]')?.getAttribute("href") ?? "";
+    const code = /^\/(?:p|reel)\/([^/]+)/.exec(href)?.[1];
+    return [href, ...code ? [code] : []];
+  }
+  installDimMarker({
+    cards: () => document.querySelectorAll("main article"),
+    idsOf: instagramPostRefs
+  });
   bootSiteAdapter((cfg) => {
     activeConfig = cfg;
     const igOn = cfg.enabled && cfg.instagram.enabled;

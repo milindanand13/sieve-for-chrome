@@ -5,8 +5,11 @@ import {
   bootSiteAdapter,
   createRafScheduler,
   evaluateDomBatch,
+  installDimMarker,
+  markCard,
   pauseAllMedia,
   rememberBounded,
+  rememberDim,
 } from "./shared.js";
 
 const SPONSORED_LABELS = new Set(["ad", "sponsored", "paid partnership"]);
@@ -130,12 +133,10 @@ async function evaluateUnfollowedHomeArticles(main: HTMLElement): Promise<void> 
     });
   });
 
-  await evaluateDomBatch(batch, (dropId) => {
+  await evaluateDomBatch(batch, (dropId, reason) => {
+    rememberDim(dropId, reason);
     const article = articleById.get(dropId);
-    if (article) {
-      article.dataset.sieveHidden = "1";
-      pauseAllMedia(article);
-    }
+    if (article) markCard(article, reason, !dropId.startsWith("/"));
   });
 }
 
@@ -184,6 +185,18 @@ function sweepInstagramDom(): void {
 }
 
 const scheduleSweep = createRafScheduler(sweepInstagramDom);
+
+function instagramPostRefs(article: HTMLElement): string[] {
+  const href =
+    article.querySelector('a[href^="/p/"], a[href^="/reel/"]')?.getAttribute("href") ?? "";
+  const code = /^\/(?:p|reel)\/([^/]+)/.exec(href)?.[1];
+  return [href, ...(code ? [code] : [])];
+}
+
+installDimMarker({
+  cards: () => document.querySelectorAll<HTMLElement>("main article"),
+  idsOf: instagramPostRefs,
+});
 
 bootSiteAdapter((cfg) => {
   activeConfig = cfg;

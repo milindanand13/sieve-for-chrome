@@ -301,10 +301,10 @@ function renderCard(
 }
 
 async function initPopup(): Promise<void> {
-  const stored = await browser.storage.local.get("sieveConfig");
+  const stored = await chrome.storage.local.get("sieveConfig");
   const config = mergeConfig(stored.sieveConfig);
 
-  const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const detected = detectPlatformFromUrl(tabs[0]?.url);
 
   const siteLabel = document.getElementById("active-site");
@@ -322,7 +322,7 @@ async function initPopup(): Promise<void> {
   }
 
   const saveAndRerender = async () => {
-    await browser.storage.local.set({ sieveConfig: config });
+    await chrome.storage.local.set({ sieveConfig: config });
     renderAll();
     updateStatusMode();
   };
@@ -436,7 +436,7 @@ async function initPopup(): Promise<void> {
   renderAll();
 
   try {
-    const status: unknown = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+    const status: unknown = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
     if (isRecord(status) && typeof status.sessionFilteredCount === "number") {
       cachedCount = status.sessionFilteredCount;
     }
@@ -446,12 +446,12 @@ async function initPopup(): Promise<void> {
   }
 
   document.getElementById("open-options")?.addEventListener("click", () => {
-    void browser.runtime.openOptionsPage();
+    void chrome.runtime.openOptionsPage();
     window.close();
   });
 }
 
-if (typeof browser !== "undefined" && browser.storage) {
+if (typeof chrome !== "undefined" && chrome.storage) {
   void initOptionsThemeGuard();
   void initPopup();
 }

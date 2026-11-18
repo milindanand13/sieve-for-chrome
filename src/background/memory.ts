@@ -9,12 +9,16 @@ import {
 } from "../types.js";
 
 const ITEM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// The user's own right-click verdicts never expire by age (LRU eviction at the cap still applies).
+const expired = (v: { at: number; reason?: string }, now: number): boolean =>
+  !v.reason?.startsWith("you: ") && now - v.at > ITEM_TTL_MS;
 const CREATOR_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const DB_NAME = "sieve_memory_v1";
 
 interface StoredVerdict {
   key: string;
   verdict: ResolvedVerdict;
+  reason?: string;
   at: number;
 }
 
@@ -70,16 +74,17 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
   let droppedTotal = 0;
 
   const dbPromise = openDb();
-  void dbPromise.then((db) => {
+  const ready: Promise<void> = dbPromise.then((db) => {
     if (!db) return;
     const now = Date.now();
+    return new Promise<void>((done) => {
     try {
       const tx = db.transaction(["items", "creators"], "readonly");
       const itemReq = tx.objectStore("items").getAll();
       itemReq.onsuccess = () => {
         if (!Array.isArray(itemReq.result)) return;
         for (const row of itemReq.result) {
-          if (isStoredVerdict(row) && now - row.at <= ITEM_TTL_MS && items.size < maxItems) {
+          if (isStoredVerdict(row) && !expired(row, now) && items.size < maxItems) {
             items.set(row.key, row);
           }
         }
@@ -93,9 +98,14 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
           }
         }
       };
+      tx.oncomplete = () => done();
+      tx.onerror = () => done();
+      tx.onabort = () => done();
     } catch {
       // Restricted or private contexts fall back to in-memory Maps.
+      done();
     }
+    });
   });
 
   function itemMapKey(platform: Platform, id: string): string {
@@ -118,20 +128,13 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
     return undefined;
   }
 
-  function isShareableHandle(rawKey: string): boolean {
-    return (
-      rawKey.length >= 3 &&
-      !/^\d+$/.test(rawKey) &&
-      !/^uc[a-z0-9_-]{20,}$/i.test(rawKey)
-    );
-  }
-
   return {
+    ready,
     getItemVerdict(platform, id) {
       const key = itemMapKey(platform, id);
       const hit = items.get(key);
       if (!hit) return undefined;
-      if (Date.now() - hit.at > ITEM_TTL_MS) {
+      if (expired(hit, Date.now())) {
         items.delete(key);
         return undefined;
       }
@@ -140,23 +143,21 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       return hit.verdict;
     },
 
-    getCreatorVerdict(platform, rawKey) {
-      const normalized = rawKey.toLowerCase();
-      const platformVerdict = evaluateCreatorRecord(
-        creators.get(creatorMapKey(platform, normalized)),
-      );
-      if (platformVerdict) return platformVerdict;
-      if (isShareableHandle(normalized)) {
-        return evaluateCreatorRecord(creators.get(`*:${normalized}`));
-      }
-      return undefined;
+    getItemReason(platform, id) {
+      return items.get(itemMapKey(platform, id))?.reason;
     },
 
-    async recordVerdict(item: FeedItem, verdict: ResolvedVerdict) {
+    getCreatorVerdict(platform, rawKey) {
+      const normalized = rawKey.toLowerCase();
+      // Per-site keys only: a verdict learned on YouTube never applies to X or Instagram.
+      return evaluateCreatorRecord(creators.get(creatorMapKey(platform, normalized)));
+    },
+
+    async recordVerdict(item: FeedItem, verdict: ResolvedVerdict, reason?: string) {
       if (verdict === "drop") droppedTotal += 1;
       const now = Date.now();
       const iKey = itemMapKey(item.platform, item.id);
-      const entry: StoredVerdict = { key: iKey, verdict, at: now };
+      const entry: StoredVerdict = { key: iKey, verdict, at: now, ...(reason ? { reason } : {}) };
 
       if (items.has(iKey)) items.delete(iKey);
       items.set(iKey, entry);
@@ -171,7 +172,6 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       const bucketKeys = new Set<string>();
       for (const cKey of creatorKeysFor(item)) {
         bucketKeys.add(creatorMapKey(item.platform, cKey));
-        if (isShareableHandle(cKey)) bucketKeys.add(`*:${cKey}`);
       }
 
       for (const fullKey of bucketKeys) {

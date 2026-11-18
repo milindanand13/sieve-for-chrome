@@ -14,6 +14,7 @@ function walkTextFiles(dir: string, out: string[] = []): string[] {
       entry.name === ".web-ext-artifacts" ||
       entry.name === "vendor" ||
       entry.name === "seeds" ||
+      entry.name === "fixtures" ||
       entry.name === "fonts"
     ) {
       continue;
@@ -29,36 +30,65 @@ function walkTextFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe("manifest, seeds, UI polish, and copy hygiene", () => {
-  it("contains valid Firefox MV2 manifest with document_start scripts", () => {
+  it("contains valid Chrome MV3 manifest with document_start scripts", () => {
     const manifestPath = path.join(root, "extension", "manifest.json");
     expect(existsSync(manifestPath)).toBe(true);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
       manifest_version: number;
-      browser_specific_settings?: { gecko?: { id?: string } };
-      background?: { scripts?: string[] };
-      browser_action?: { default_popup?: string };
+      browser_specific_settings?: unknown;
+      permissions?: string[];
+      host_permissions?: string[];
+      optional_host_permissions?: string[];
+      background?: { service_worker?: string; scripts?: string[] };
+      action?: { default_popup?: string };
+      browser_action?: unknown;
       options_ui?: { page?: string };
-      content_scripts?: Array<{ run_at?: string; js?: string[]; css?: string[] }>;
+      declarative_net_request?: { rule_resources?: Array<{ path: string }> };
+      content_scripts?: Array<{
+        matches?: string[];
+        run_at?: string;
+        world?: string;
+        js?: string[];
+        css?: string[];
+      }>;
     };
 
-    expect(manifest.manifest_version).toBe(2);
-    expect(manifest.browser_specific_settings?.gecko?.id).toBe("sieve@twarner491.github.io");
-    expect(manifest.browser_action?.default_popup).toBe("ui/popup.html");
+    expect(manifest.manifest_version).toBe(3);
+    expect(manifest.browser_specific_settings).toBeUndefined();
+    expect(manifest.browser_action).toBeUndefined();
+    expect(manifest.background?.scripts).toBeUndefined();
+    expect(manifest.permissions).toContain("declarativeNetRequest");
+    expect(manifest.permissions?.some((p) => p.startsWith("webRequest"))).toBe(false);
+    expect(manifest.action?.default_popup).toBe("ui/popup.html");
     expect(manifest.options_ui?.page).toBe("ui/options.html");
-    expect(manifest.content_scripts?.length).toBe(4);
+
+    const hosts = JSON.stringify(manifest.host_permissions);
+    expect(hosts).not.toContain("tiktok");
+    expect(JSON.stringify(manifest.content_scripts)).not.toContain("tiktok");
+    expect(manifest.optional_host_permissions).toContain("https://api.openai.com/*");
+    expect(manifest.host_permissions).not.toContain("https://api.openai.com/*");
+
+    // Three sites, each with an isolated script and a MAIN-world interceptor.
+    const scripts = manifest.content_scripts ?? [];
+    expect(scripts.length).toBe(6);
+    expect(scripts.filter((cs) => cs.world === "MAIN").length).toBe(3);
+    for (const cs of scripts.filter((c) => c.world === "MAIN")) {
+      expect(cs.js).toEqual(["dist/intercept.js"]);
+    }
 
     const referencedPaths = [
-      ...(manifest.background?.scripts ?? []),
-      manifest.browser_action?.default_popup ?? "",
+      manifest.background?.service_worker ?? "",
+      manifest.action?.default_popup ?? "",
       manifest.options_ui?.page ?? "",
-      ...(manifest.content_scripts ?? []).flatMap((cs) => [...(cs.js ?? []), ...(cs.css ?? [])]),
+      ...(manifest.declarative_net_request?.rule_resources ?? []).map((r) => r.path),
+      ...scripts.flatMap((cs) => [...(cs.js ?? []), ...(cs.css ?? [])]),
     ].filter(Boolean);
 
     for (const rel of referencedPaths) {
       expect(existsSync(path.join(root, "extension", rel)), `Missing ${rel}`).toBe(true);
     }
 
-    for (const cs of manifest.content_scripts ?? []) {
+    for (const cs of scripts) {
       expect(cs.run_at).toBe("document_start");
     }
   });
@@ -129,7 +159,7 @@ describe("manifest, seeds, UI polish, and copy hygiene", () => {
     expect(ttCss).toContain("download-entrance");
     expect(ttCss).toContain("shortdrama");
     expect(detectPlatformFromUrl("https://example.org")).toBeNull();
-    expect(detectPlatformFromUrl("about:debugging#/runtime/this-firefox")).toBeNull();
+    expect(detectPlatformFromUrl("chrome://extensions")).toBeNull();
     expect(detectPlatformFromUrl("https://www.youtube.com/watch?v=IS5ycm7VfXg")).toBe("youtube");
     expect(detectPlatformFromUrl("https://x.com/explore")).toBe("x");
     expect(detectPlatformFromUrl("https://www.instagram.com/reels/")).toBe("instagram");

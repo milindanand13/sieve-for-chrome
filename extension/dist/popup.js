@@ -15,9 +15,15 @@
 
 Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.`;
+Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
+
+KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
+- photography
+- filmmaking and cinematography
+- media: journalism, criticism, and production
+- outdoor sports`;
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
-  var LOCAL_DEFAULT_MODEL = "qwen2.5:3b";
+  var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
     schemaVersion: SCHEMA_VERSION,
     enabled: true,
@@ -48,7 +54,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       hideClutter: true
     },
     tiktok: {
-      enabled: true,
+      enabled: false,
       caliberFilter: true,
       cleanChrome: true,
       lightMode: true,
@@ -62,6 +68,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       rubric: DEFAULT_RUBRIC,
       streamHoldMs: 1500
     },
+    display: { hideDropped: false },
+    recorder: { enabled: false },
     allowHandles: [],
     blockHandles: []
   };
@@ -79,6 +87,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
     const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
+    const disp = isRecord(stored.display) ? stored.display : {};
+    const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
     const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
     return {
@@ -125,6 +135,8 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
         rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
+      display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
+      recorder: { enabled: bool(rec, "enabled", d.recorder.enabled) },
       allowHandles: readStringList(stored.allowHandles),
       blockHandles: readStringList(stored.blockHandles)
     };
@@ -392,9 +404,9 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     return card;
   }
   async function initPopup() {
-    const stored = await browser.storage.local.get("sieveConfig");
+    const stored = await chrome.storage.local.get("sieveConfig");
     const config = mergeConfig(stored.sieveConfig);
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const detected = detectPlatformFromUrl(tabs[0]?.url);
     const siteLabel = document.getElementById("active-site");
     const rawMaster = document.getElementById("master-enabled");
@@ -409,7 +421,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       siteLabel.textContent = matchedCard ? matchedCard.title : "all sites";
     }
     const saveAndRerender = async () => {
-      await browser.storage.local.set({ sieveConfig: config });
+      await chrome.storage.local.set({ sieveConfig: config });
       renderAll();
       updateStatusMode();
     };
@@ -502,7 +514,7 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
     }
     renderAll();
     try {
-      const status = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+      const status = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
       if (isRecord(status) && typeof status.sessionFilteredCount === "number") {
         cachedCount = status.sessionFilteredCount;
       }
@@ -511,11 +523,11 @@ Drop items that fail Authenticity or Substance: ragebait, political or culture-w
       if (statusLine) statusLine.textContent = DEFAULT_CONFIG.grader.mode;
     }
     document.getElementById("open-options")?.addEventListener("click", () => {
-      void browser.runtime.openOptionsPage();
+      void chrome.runtime.openOptionsPage();
       window.close();
     });
   }
-  if (typeof browser !== "undefined" && browser.storage) {
+  if (typeof chrome !== "undefined" && chrome.storage) {
     void initOptionsThemeGuard();
     void initPopup();
   }
