@@ -79,7 +79,7 @@ let dimSite: DimSite | undefined;
  * feed throw on re-render and go blank.
  */
 export function markCard(card: HTMLElement, reason: string, direct = false): void {
-  if (card.dataset.sieveKept === "1") return; // user said keep this one
+  if (isKept(card)) return; // user said keep this one
   if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
   if (direct) card.dataset.sieveDimDirect = "1";
   if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
@@ -89,6 +89,10 @@ function unmarkCard(card: HTMLElement): void {
   delete card.dataset.sieveDim;
   delete card.dataset.sieveDimReason;
 }
+
+// Kept by item id, not by element: YouTube and X reuse card elements for new items.
+const keptIds = new Set<string>();
+const isKept = (card: HTMLElement): boolean => !!dimSite?.idsOf(card).some((id) => keptIds.has(id));
 
 export function rememberDim(id: string, reason: string): void {
   if (!id) return;
@@ -102,7 +106,7 @@ function scanDims(): void {
   if (!dimSite) return;
   for (const card of dimSite.cards()) {
     const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
-    if (card.dataset.sieveKept === "1") continue;
+    if (isKept(card)) continue;
     if (reason) markCard(card, reason);
     else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
   }
@@ -150,18 +154,16 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
     const ids = dimSite.idsOf(card);
     const keep = action === "keep" || action === "keepCreator";
     void chrome.runtime
-      .sendMessage({ type: "USER_FEEDBACK", action, ids })
+      .sendMessage({ type: "USER_FEEDBACK", action, ids, text: (card.innerText || "").slice(0, 300) })
       .then((res: unknown) => {
         if (!isRecord(res) || res.ok !== true) return;
         if (keep) {
-          ids.forEach((id) => dimReasons.delete(id));
+          ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
           unmarkCard(card);
           delete card.dataset.sieveDimDirect;
-          card.dataset.sieveKept = "1";
         } else {
-          ids.forEach((id) => rememberDim(id, "you: slop"));
-          delete card.dataset.sieveKept;
-          markCard(card, "you: slop", true);
+          ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
+          markCard(card, "you: slop");
         }
       })
       .catch(() => undefined);

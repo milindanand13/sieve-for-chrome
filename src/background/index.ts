@@ -114,8 +114,9 @@ function parseFeedback(raw: unknown): FeedbackEntry[] {
 }
 
 function rememberRecent(item: FeedItem): void {
-  for (const key of [item.id, item.altId]) {
-    if (!key) continue;
+  for (const id of [item.id, item.altId]) {
+    if (!id) continue;
+    const key = `${item.platform}:${id}`;
     if (!recentItems.has(key) && recentItems.size >= RECENT_CAP) {
       recentItems.delete(recentItems.keys().next().value!);
     }
@@ -123,11 +124,18 @@ function rememberRecent(item: FeedItem): void {
   }
 }
 
-async function handleFeedback(action: string, ids: string[], sender: chrome.runtime.MessageSender) {
-  const known = ids.map((id) => recentItems.get(id)).find(Boolean);
+async function handleFeedback(
+  action: string,
+  ids: string[],
+  pageText: string,
+  sender: chrome.runtime.MessageSender,
+) {
   const platform = siteForHost(new URL(sender.tab?.url ?? "http://x").hostname);
-  if (!known && !platform) return { ok: false, error: "unknown site" };
-  const item: FeedItem = known ?? { platform: platform!, id: ids[0]!, surface: "home", titleOrText: "" };
+  if (!platform) return { ok: false, error: "unknown site" };
+  const known = ids.map((id) => recentItems.get(`${platform}:${id}`)).find(Boolean);
+  // shortcut: recentItems is lost when the service worker sleeps, so older cards fall back to the
+  // card's own text and no creator; persist it to storage.session if creator actions fail often.
+  const item: FeedItem = known ?? { platform, id: ids[0]!, surface: "home", titleOrText: pageText };
   const keep = action === "keep" || action === "keepCreator";
   if (action === "keepCreator" || action === "dropCreator") {
     const handle = item.creatorHandle || item.creatorId;
@@ -143,11 +151,15 @@ async function handleFeedback(action: string, ids: string[], sender: chrome.runt
     config = next;
     await chrome.storage.local.set({ sieveConfig: next });
   }
-  await memory.recordVerdict(item, keep ? "keep" : "drop", keep ? "you: keep" : "you: slop");
+  const reason = keep ? "you: keep" : "you: slop";
+  await memory.recordVerdict(item, keep ? "keep" : "drop", reason);
+  // Unknown item: the id the feed used may be any of the card's ids (Instagram shortcode vs pk).
+  if (!known) for (const id of ids.slice(1)) await memory.recordVerdict({ ...item, id }, keep ? "keep" : "drop", reason);
   const text = snippet(item.titleOrText);
   if (text) {
     const verdict = keep ? "keep" : "drop";
-    feedback = [...feedback, { text, verdict } as FeedbackEntry].slice(-FEEDBACK_CAP);
+    const rest = feedback.filter((e) => e.text !== text); // latest click wins
+    feedback = [...rest, { text, verdict } as FeedbackEntry].slice(-FEEDBACK_CAP);
     await chrome.storage.local.set({ [FEEDBACK_KEY]: feedback });
   }
   return { ok: true };
@@ -292,7 +304,8 @@ function handle(
     ) {
       return Promise.resolve({ ok: false, error: "bad request" });
     }
-    return handleFeedback(raw.action, raw.ids, sender);
+    const text = typeof raw.text === "string" ? raw.text.slice(0, 300) : "";
+    return handleFeedback(raw.action, raw.ids, text, sender);
   }
 
   if (raw.type === "GET_STATUS") {

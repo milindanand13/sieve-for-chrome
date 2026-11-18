@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMemoryStore } from "../src/background/memory.js";
 import type { FeedItem } from "../src/types.js";
 
@@ -60,5 +60,16 @@ describe("createMemoryStore", () => {
     await store.clear();
     expect(store.getItemVerdict("youtube", "c")).toBeUndefined();
     expect(store.counts().cachedItems).toBe(0);
+  });
+
+  it("expires grader verdicts after 30 days but never the user's own", async () => {
+    vi.useFakeTimers();
+    const store = createMemoryStore();
+    await store.recordVerdict(makeItem("g", "@A"), "drop", "grader");
+    await store.recordVerdict(makeItem("u", "@B"), "keep", "you: keep");
+    vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000);
+    expect(store.getItemVerdict("youtube", "g")).toBeUndefined();
+    expect(store.getItemVerdict("youtube", "u")).toBe("keep");
+    vi.useRealTimers();
   });
 });

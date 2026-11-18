@@ -461,7 +461,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   var DIM_CAP = 1500;
   var dimSite;
   function markCard(card, reason, direct = false) {
-    if (card.dataset.sieveKept === "1") return;
+    if (isKept(card)) return;
     if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
     if (direct) card.dataset.sieveDimDirect = "1";
     if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
@@ -470,6 +470,8 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     delete card.dataset.sieveDim;
     delete card.dataset.sieveDimReason;
   }
+  var keptIds = /* @__PURE__ */ new Set();
+  var isKept = (card) => !!dimSite?.idsOf(card).some((id) => keptIds.has(id));
   function rememberDim(id, reason) {
     if (!id) return;
     if (!dimReasons.has(id) && dimReasons.size >= DIM_CAP) {
@@ -481,7 +483,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (!dimSite) return;
     for (const card of dimSite.cards()) {
       const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
-      if (card.dataset.sieveKept === "1") continue;
+      if (isKept(card)) continue;
       if (reason) markCard(card, reason);
       else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
     }
@@ -522,17 +524,15 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       if (!card) return;
       const ids = dimSite.idsOf(card);
       const keep = action === "keep" || action === "keepCreator";
-      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids }).then((res) => {
+      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text: (card.innerText || "").slice(0, 300) }).then((res) => {
         if (!isRecord(res) || res.ok !== true) return;
         if (keep) {
-          ids.forEach((id) => dimReasons.delete(id));
+          ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
           unmarkCard(card);
           delete card.dataset.sieveDimDirect;
-          card.dataset.sieveKept = "1";
         } else {
-          ids.forEach((id) => rememberDim(id, "you: slop"));
-          delete card.dataset.sieveKept;
-          markCard(card, "you: slop", true);
+          ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
+          markCard(card, "you: slop");
         }
       }).catch(() => void 0);
     });

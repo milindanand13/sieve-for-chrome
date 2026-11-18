@@ -9,6 +9,9 @@ import {
 } from "../types.js";
 
 const ITEM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// The user's own right-click verdicts never expire by age (LRU eviction at the cap still applies).
+const expired = (v: { at: number; reason?: string }, now: number): boolean =>
+  !v.reason?.startsWith("you: ") && now - v.at > ITEM_TTL_MS;
 const CREATOR_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const DB_NAME = "sieve_memory_v1";
 
@@ -81,7 +84,7 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       itemReq.onsuccess = () => {
         if (!Array.isArray(itemReq.result)) return;
         for (const row of itemReq.result) {
-          if (isStoredVerdict(row) && now - row.at <= ITEM_TTL_MS && items.size < maxItems) {
+          if (isStoredVerdict(row) && !expired(row, now) && items.size < maxItems) {
             items.set(row.key, row);
           }
         }
@@ -131,7 +134,7 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       const key = itemMapKey(platform, id);
       const hit = items.get(key);
       if (!hit) return undefined;
-      if (Date.now() - hit.at > ITEM_TTL_MS) {
+      if (expired(hit, Date.now())) {
         items.delete(key);
         return undefined;
       }
