@@ -143,40 +143,49 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
     if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed as DimEntry[]);
   });
   // Right-click feedback: remember what was clicked, apply the verdict when the menu item fires.
-  let lastContext: MouseEvent | null = null;
-  document.addEventListener("contextmenu", (e) => (lastContext = e), true);
+  // Resolved at right-click time: the page can scroll or re-render before the menu item fires.
+  let lastCard: HTMLElement | undefined;
+  let lastIds: string[] = [];
+  let lastText = "";
+  document.addEventListener(
+    "contextmenu",
+    (ev) => {
+      const cards = dimSite ? [...dimSite.cards()] : [];
+      const hit = (c: HTMLElement): boolean => {
+        const r = c.getBoundingClientRect();
+        return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+      };
+      // YouTube's hover preview player sits over the thumbnail but outside the card, so fall back to position.
+      lastCard = cards.find((c) => ev.target instanceof Node && c.contains(ev.target)) ?? cards.find(hit);
+      lastIds = lastCard && dimSite ? dimSite.idsOf(lastCard) : [];
+      lastText = (lastCard?.innerText || "").slice(0, 300);
+    },
+    true,
+  );
   chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
     const action = msg.action;
-    const ev = lastContext;
-    const cards = dimSite && ev ? [...dimSite.cards()] : [];
-    const hit = (c: HTMLElement): boolean => {
-      const r = c.getBoundingClientRect();
-      return !!ev && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
-    };
-    // YouTube's hover preview player sits over the thumbnail but outside the card, so fall back to position.
-    const card =
-      typeof action === "string"
-        ? (cards.find((c) => ev?.target instanceof Node && c.contains(ev.target)) ?? cards.find(hit))
-        : undefined;
+    const card = lastCard;
     if (!card || !dimSite || typeof action !== "string") {
       sendResponse({ ok: false, error: "no post under the click" });
       return;
     }
-    const ids = dimSite.idsOf(card);
+    const ids = lastIds;
     const keep = action === "keep" || action === "keepCreator";
     void chrome.runtime
-      .sendMessage({ type: "USER_FEEDBACK", action, ids, text: (card.innerText || "").slice(0, 300) })
+      .sendMessage({ type: "USER_FEEDBACK", action, ids, text: lastText })
       .then((res: unknown) => {
         sendResponse(res ?? { ok: false, error: "no reply from Sieve" });
-        if (!isRecord(res) || res.ok !== true) return;
+        if (!isRecord(res) || res.ok !== true || !dimSite) return;
+        // By id, not element: the clicked element may now show a different post.
+        const site = dimSite;
+        const targets = ids.length ? [...site.cards()].filter((c) => site.idsOf(c).some((id) => ids.includes(id))) : [card];
         if (keep) {
           ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
-          unmarkCard(card);
-          delete card.dataset.sieveDimDirect;
+          targets.forEach((c) => (unmarkCard(c), delete c.dataset.sieveDimDirect));
         } else {
           ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
-          markCard(card, "you: slop");
+          targets.forEach((c) => markCard(c, "you: slop"));
         }
       })
       .catch(() => sendResponse({ ok: false, error: "no reply from Sieve" }));
