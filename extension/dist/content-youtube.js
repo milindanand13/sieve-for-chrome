@@ -536,34 +536,44 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
       if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed);
     });
-    let lastContext = null;
-    document.addEventListener("contextmenu", (e) => lastContext = e, true);
+    let lastCard;
+    let lastIds = [];
+    let lastText = "";
+    document.addEventListener(
+      "contextmenu",
+      (ev) => {
+        const cards = dimSite ? [...dimSite.cards()] : [];
+        const hit = (c) => {
+          const r = c.getBoundingClientRect();
+          return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+        };
+        lastCard = cards.find((c) => ev.target instanceof Node && c.contains(ev.target)) ?? cards.find(hit);
+        lastIds = lastCard && dimSite ? dimSite.idsOf(lastCard) : [];
+        lastText = (lastCard?.innerText || "").slice(0, 300);
+      },
+      true
+    );
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
       const action = msg.action;
-      const ev = lastContext;
-      const cards = dimSite && ev ? [...dimSite.cards()] : [];
-      const hit = (c) => {
-        const r = c.getBoundingClientRect();
-        return !!ev && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
-      };
-      const card = typeof action === "string" ? cards.find((c) => ev?.target instanceof Node && c.contains(ev.target)) ?? cards.find(hit) : void 0;
+      const card = lastCard;
       if (!card || !dimSite || typeof action !== "string") {
         sendResponse({ ok: false, error: "no post under the click" });
         return;
       }
-      const ids = dimSite.idsOf(card);
+      const ids = lastIds;
       const keep = action === "keep" || action === "keepCreator";
-      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text: (card.innerText || "").slice(0, 300) }).then((res) => {
+      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text: lastText }).then((res) => {
         sendResponse(res ?? { ok: false, error: "no reply from Sieve" });
-        if (!isRecord(res) || res.ok !== true) return;
+        if (!isRecord(res) || res.ok !== true || !dimSite) return;
+        const site = dimSite;
+        const targets = ids.length ? [...site.cards()].filter((c) => site.idsOf(c).some((id) => ids.includes(id))) : [card];
         if (keep) {
           ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
-          unmarkCard(card);
-          delete card.dataset.sieveDimDirect;
+          targets.forEach((c) => (unmarkCard(c), delete c.dataset.sieveDimDirect));
         } else {
           ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
-          markCard(card, "you: slop");
+          targets.forEach((c) => markCard(c, "you: slop"));
         }
       }).catch(() => sendResponse({ ok: false, error: "no reply from Sieve" }));
       return true;
