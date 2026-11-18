@@ -159,6 +159,8 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       const iKey = itemMapKey(item.platform, item.id);
       const entry: StoredVerdict = { key: iKey, verdict, at: now, ...(reason ? { reason } : {}) };
 
+      // A repeat of the user's same call on the same post must not count toward the creator again.
+      const repeat = !!reason?.startsWith("you: ") && items.get(iKey)?.reason === reason;
       if (items.has(iKey)) items.delete(iKey);
       items.set(iKey, entry);
 
@@ -182,7 +184,7 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
           updatedAt: now,
         };
         // The user's own calls count double, so two corrections teach Sieve a creator.
-        const weight = reason?.startsWith("you: ") ? 2 : 1;
+        const weight = repeat ? 0 : reason?.startsWith("you: ") ? 2 : 1;
         if (verdict === "keep") existing.keeps += weight;
         else existing.drops += weight;
         existing.updatedAt = now;

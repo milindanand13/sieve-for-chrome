@@ -80,4 +80,10 @@ describe("createMemoryStore", () => {
     await store.recordVerdict(makeItem("k2", "@Liked"), "keep", "you: keep");
     expect(store.getCreatorVerdict("youtube", "liked")).toBe("keep");
   });
+
+  it("does not count a repeated click on the same post twice", async () => {
+    const store = createMemoryStore();
+    for (let i = 0; i < 3; i++) await store.recordVerdict(makeItem("d1", "@Spam"), "drop", "you: slop");
+    expect(store.getCreatorVerdict("youtube", "spam")).toBeUndefined();
+  });
 });

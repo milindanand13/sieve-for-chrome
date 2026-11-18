@@ -16,7 +16,7 @@ describe("feedbackBlock", () => {
   it("picks the corrections closest to the batch, newest first on ties, in original order", () => {
     const e = (text: string) => ({ text, verdict: "drop" as const });
     const all = [e("crypto memecoin pump"), e("cooking pasta tonight"), e("rust compiler internals"), e("pasta sauce")];
-    expect(pickExamples(all, "New rust compiler release, pasta optional", 2).map((x) => x.text)).toEqual([
+    expect(pickExamples(all, "New compiler internals release, pasta optional", 2).map((x) => x.text)).toEqual([
       "rust compiler internals",
       "pasta sauce",
     ]);
