@@ -143,14 +143,21 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
     if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed as DimEntry[]);
   });
   // Right-click feedback: remember what was clicked, apply the verdict when the menu item fires.
-  let lastContext: EventTarget | null = null;
-  document.addEventListener("contextmenu", (e) => (lastContext = e.target), true);
+  let lastContext: MouseEvent | null = null;
+  document.addEventListener("contextmenu", (e) => (lastContext = e), true);
   chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
     const action = msg.action;
+    const ev = lastContext;
+    const cards = dimSite && ev ? [...dimSite.cards()] : [];
+    const hit = (c: HTMLElement): boolean => {
+      const r = c.getBoundingClientRect();
+      return !!ev && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+    };
+    // YouTube's hover preview player sits over the thumbnail but outside the card, so fall back to position.
     const card =
-      dimSite && lastContext instanceof Node && typeof action === "string"
-        ? [...dimSite.cards()].find((c) => c.contains(lastContext as Node))
+      typeof action === "string"
+        ? (cards.find((c) => ev?.target instanceof Node && c.contains(ev.target)) ?? cards.find(hit))
         : undefined;
     if (!card || !dimSite || typeof action !== "string") {
       sendResponse({ ok: false, error: "no post under the click" });
