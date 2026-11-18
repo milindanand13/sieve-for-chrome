@@ -46,7 +46,7 @@ Seed lists, ratio filters, DeArrow title lookups, and UI debloat work with no mo
 
 ```bash
 brew install ollama
-ollama pull qwen2.5:3b
+ollama pull qwen3.5:4b
 ollama serve
 ```
 
