@@ -181,8 +181,10 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
           drops: 0,
           updatedAt: now,
         };
-        if (verdict === "keep") existing.keeps += 1;
-        else existing.drops += 1;
+        // The user's own calls count double, so two corrections teach Sieve a creator.
+        const weight = reason?.startsWith("you: ") ? 2 : 1;
+        if (verdict === "keep") existing.keeps += weight;
+        else existing.drops += weight;
         existing.updatedAt = now;
         creators.set(fullKey, existing);
         updatedCreators.push(existing);
