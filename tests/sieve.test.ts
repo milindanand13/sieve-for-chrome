@@ -196,3 +196,29 @@ describe("evaluateLocalTiers", () => {
     expect(evaluateLocalTiers(shortDrama, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
   });
 });
+
+describe("user feedback", () => {
+  const item: FeedItem = {
+    platform: "youtube",
+    id: "fb1",
+    creatorHandle: "uc_slop_1",
+    surface: "home",
+    titleOrText: "Some video",
+  };
+  const mem = (reason: string): MemoryLookup => ({
+    getItemVerdict: () => "keep",
+    getItemReason: () => reason,
+    getCreatorVerdict: () => undefined,
+  });
+
+  it("a user keep beats the slop list", () => {
+    expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), mem("you: keep"))).toBe("keep");
+    // Non-user cached verdicts still lose to the slop list.
+    expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), mem("grader"))).toBe("drop");
+  });
+
+  it("a user keep beats the novelty rule", () => {
+    const novelty = { isRedundantRehash: () => true };
+    expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), mem("you: keep"), novelty)).toBe("keep");
+  });
+});

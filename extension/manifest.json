@@ -12,7 +12,8 @@
     "unlimitedStorage",
     "declarativeNetRequest",
     "tabs",
-    "activeTab"
+    "activeTab",
+    "contextMenus"
   ],
   "host_permissions": [
     "*://*.youtube.com/*",

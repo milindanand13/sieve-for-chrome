@@ -823,6 +823,9 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   var KEEP = (reason) => ({ verdict: "keep", reason });
   var DROP = (reason) => ({ verdict: "drop", reason });
   function evaluateLocalDecision(item, config2, seeds2, memory2, novelty2) {
+    const own = memory2.getItemReason?.(item.platform, item.id);
+    const ownVerdict = own?.startsWith("you: ") ? memory2.getItemVerdict(item.platform, item.id) : void 0;
+    if (own && ownVerdict) return { verdict: ownVerdict, reason: own };
     if (item.isSponsored) return DROP("sponsored");
     const keys = creatorKeysFor(item);
     if (config2.blockHandles.length > 0) {
@@ -1455,6 +1458,20 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       });
     }
     return sink.remove;
+  }
+
+  // src/core/feedback.ts
+  function feedbackBlock(entries) {
+    const section = (title, verdict) => {
+      const lines = entries.filter((e) => e.verdict === verdict).map((e) => `- ${e.text}`);
+      return lines.length ? `
+${title}:
+${lines.join("\n")}` : "";
+    };
+    const body = section("Keep", "keep") + section("Drop", "drop");
+    return body ? `
+
+The user corrected earlier verdicts. Judge similar items the same way.${body}` : "";
   }
 
   // src/adapters/instagram-json.ts
@@ -2613,6 +2630,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     try {
       const stored = await chrome.storage.local.get("sieveConfig");
       config = mergeConfig(stored.sieveConfig);
+      feedback = parseFeedback((await chrome.storage.local.get(FEEDBACK_KEY))[FEEDBACK_KEY]);
     } catch {
       config = structuredClone(DEFAULT_CONFIG);
     }
@@ -2631,9 +2649,91 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (area === "local" && changes.sieveConfig) {
       config = mergeConfig(changes.sieveConfig.newValue);
     }
+    if (area === "local" && changes.sieveFeedback) feedback = parseFeedback(changes.sieveFeedback.newValue);
+  });
+  var feedback = [];
+  var FEEDBACK_KEY = "sieveFeedback";
+  var FEEDBACK_CAP = 30;
+  var RECENT_CAP = 3e3;
+  var recentItems = /* @__PURE__ */ new Map();
+  var FEEDBACK_ACTIONS = ["keep", "drop", "keepCreator", "dropCreator"];
+  function parseFeedback(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (e) => isRecord(e) && typeof e.text === "string" && (e.verdict === "keep" || e.verdict === "drop")
+    );
+  }
+  function rememberRecent(item) {
+    for (const key of [item.id, item.altId]) {
+      if (!key) continue;
+      if (!recentItems.has(key) && recentItems.size >= RECENT_CAP) {
+        recentItems.delete(recentItems.keys().next().value);
+      }
+      recentItems.set(key, item);
+    }
+  }
+  async function handleFeedback(action, ids, sender) {
+    const known = ids.map((id) => recentItems.get(id)).find(Boolean);
+    const platform = siteForHost(new URL(sender.tab?.url ?? "http://x").hostname);
+    if (!known && !platform) return { ok: false, error: "unknown site" };
+    const item = known ?? { platform, id: ids[0], surface: "home", titleOrText: "" };
+    const keep = action === "keep" || action === "keepCreator";
+    if (action === "keepCreator" || action === "dropCreator") {
+      const handle2 = item.creatorHandle || item.creatorId;
+      if (!handle2) return { ok: false, error: "no creator known" };
+      const norm = normalizeHandle(handle2);
+      const same = (h) => normalizeHandle(h) === norm;
+      const next = {
+        ...config,
+        allowHandles: config.allowHandles.filter((h) => !same(h)),
+        blockHandles: config.blockHandles.filter((h) => !same(h))
+      };
+      (keep ? next.allowHandles : next.blockHandles).push(handle2);
+      config = next;
+      await chrome.storage.local.set({ sieveConfig: next });
+    }
+    await memory.recordVerdict(item, keep ? "keep" : "drop", keep ? "you: keep" : "you: slop");
+    const text = snippet(item.titleOrText);
+    if (text) {
+      const verdict = keep ? "keep" : "drop";
+      feedback = [...feedback, { text, verdict }].slice(-FEEDBACK_CAP);
+      await chrome.storage.local.set({ [FEEDBACK_KEY]: feedback });
+    }
+    return { ok: true };
+  }
+  chrome.runtime.onInstalled.addListener(() => {
+    const documentUrlPatterns = [
+      "*://*.youtube.com/*",
+      "*://x.com/*",
+      "*://*.x.com/*",
+      "*://twitter.com/*",
+      "*://*.twitter.com/*",
+      "*://*.instagram.com/*"
+    ];
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({ id: "sieve", title: "Sieve", contexts: ["all"], documentUrlPatterns });
+      const entries = [
+        ["keep", "Not slop, keep this"],
+        ["drop", "Slop, dim this"],
+        ["keepCreator", "Always keep this creator"],
+        ["dropCreator", "Always dim this creator"]
+      ];
+      for (const [id, title] of entries) {
+        chrome.contextMenus.create({ id, parentId: "sieve", title, contexts: ["all"], documentUrlPatterns });
+      }
+    });
+  });
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (tab?.id === void 0 || typeof info.menuItemId !== "string") return;
+    chrome.tabs.sendMessage(tab.id, { type: "FEEDBACK", action: info.menuItemId }, { frameId: info.frameId ?? 0 }).catch(() => void 0);
   });
   async function evaluate(items, docKey, target) {
-    const dropped = await runSieveDetailed(items, config, seeds, memory, fetch, novelty, {
+    items.forEach(rememberRecent);
+    const graded = {
+      ...config,
+      grader: { ...config.grader, rubric: config.grader.rubric + feedbackBlock(feedback) }
+    };
+    const dropped = await runSieveDetailed(items, graded, seeds, memory, fetch, novelty, {
       skipHold: !config.display.hideDropped,
       onGraderError: () => void stats.bumpDiag().catch(() => void 0),
       onLate: (late) => {
@@ -2690,6 +2790,12 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         await stats.recordRemoved(res.hard).catch(() => void 0);
         return { body: res.body, dimmed: res.dimmed };
       });
+    }
+    if (raw.type === "USER_FEEDBACK") {
+      if (!sender.tab || sender.id !== chrome.runtime.id || typeof raw.action !== "string" || !FEEDBACK_ACTIONS.includes(raw.action) || !Array.isArray(raw.ids) || raw.ids.length === 0 || raw.ids.length > 10 || !raw.ids.every((id) => typeof id === "string" && id.length > 0 && id.length < 300)) {
+        return Promise.resolve({ ok: false, error: "bad request" });
+      }
+      return handleFeedback(raw.action, raw.ids, sender);
     }
     if (raw.type === "GET_STATUS") {
       const stats2 = memory.counts();

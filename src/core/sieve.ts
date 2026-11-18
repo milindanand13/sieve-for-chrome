@@ -66,6 +66,11 @@ export function evaluateLocalDecision(
   memory: MemoryLookup,
   novelty?: NoveltyLookup,
 ): LocalDecision {
+  // The user's own call (context-menu feedback) beats every rule.
+  const own = memory.getItemReason?.(item.platform, item.id);
+  const ownVerdict = own?.startsWith("you: ") ? memory.getItemVerdict(item.platform, item.id) : undefined;
+  if (own && ownVerdict) return { verdict: ownVerdict, reason: own };
+
   if (item.isSponsored) return DROP("sponsored");
 
   const keys = creatorKeysFor(item);

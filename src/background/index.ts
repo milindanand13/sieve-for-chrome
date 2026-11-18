@@ -18,7 +18,9 @@ import { createMemoryStore } from "./memory.js";
 import { createNoveltyMemory } from "./novelty.js";
 import { addFixture } from "./fixtures.js";
 import { snippet } from "../core/sink.js";
-import { rewriteResponseBody } from "./rewrite.js";
+import { feedbackBlock, type FeedbackEntry } from "../core/feedback.js";
+import { normalizeHandle } from "../core/dehype.js";
+import { rewriteResponseBody, siteForHost } from "./rewrite.js";
 import { createStats } from "./stats.js";
 import { matchesInterceptUrl, MAX_STREAM_BYTES } from "../shared/intercept.js";
 
@@ -69,6 +71,7 @@ async function initConfigAndSeeds(): Promise<void> {
   try {
     const stored = await chrome.storage.local.get("sieveConfig");
     config = mergeConfig(stored.sieveConfig);
+    feedback = parseFeedback((await chrome.storage.local.get(FEEDBACK_KEY))[FEEDBACK_KEY]);
   } catch {
     config = structuredClone(DEFAULT_CONFIG);
   }
@@ -91,6 +94,93 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.sieveConfig) {
     config = mergeConfig(changes.sieveConfig.newValue);
   }
+  if (area === "local" && changes.sieveFeedback) feedback = parseFeedback(changes.sieveFeedback.newValue);
+});
+
+// ---- Right-click feedback: corrections persist and are shown to the grader as examples.
+let feedback: FeedbackEntry[] = [];
+const FEEDBACK_KEY = "sieveFeedback";
+const FEEDBACK_CAP = 30;
+const RECENT_CAP = 3000;
+const recentItems = new Map<string, FeedItem>();
+const FEEDBACK_ACTIONS = ["keep", "drop", "keepCreator", "dropCreator"];
+
+function parseFeedback(raw: unknown): FeedbackEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (e): e is FeedbackEntry =>
+      isRecord(e) && typeof e.text === "string" && (e.verdict === "keep" || e.verdict === "drop"),
+  );
+}
+
+function rememberRecent(item: FeedItem): void {
+  for (const key of [item.id, item.altId]) {
+    if (!key) continue;
+    if (!recentItems.has(key) && recentItems.size >= RECENT_CAP) {
+      recentItems.delete(recentItems.keys().next().value!);
+    }
+    recentItems.set(key, item);
+  }
+}
+
+async function handleFeedback(action: string, ids: string[], sender: chrome.runtime.MessageSender) {
+  const known = ids.map((id) => recentItems.get(id)).find(Boolean);
+  const platform = siteForHost(new URL(sender.tab?.url ?? "http://x").hostname);
+  if (!known && !platform) return { ok: false, error: "unknown site" };
+  const item: FeedItem = known ?? { platform: platform!, id: ids[0]!, surface: "home", titleOrText: "" };
+  const keep = action === "keep" || action === "keepCreator";
+  if (action === "keepCreator" || action === "dropCreator") {
+    const handle = item.creatorHandle || item.creatorId;
+    if (!handle) return { ok: false, error: "no creator known" };
+    const norm = normalizeHandle(handle);
+    const same = (h: string): boolean => normalizeHandle(h) === norm;
+    const next: SieveConfig = {
+      ...config,
+      allowHandles: config.allowHandles.filter((h) => !same(h)),
+      blockHandles: config.blockHandles.filter((h) => !same(h)),
+    };
+    (keep ? next.allowHandles : next.blockHandles).push(handle);
+    config = next;
+    await chrome.storage.local.set({ sieveConfig: next });
+  }
+  await memory.recordVerdict(item, keep ? "keep" : "drop", keep ? "you: keep" : "you: slop");
+  const text = snippet(item.titleOrText);
+  if (text) {
+    const verdict = keep ? "keep" : "drop";
+    feedback = [...feedback, { text, verdict } as FeedbackEntry].slice(-FEEDBACK_CAP);
+    await chrome.storage.local.set({ [FEEDBACK_KEY]: feedback });
+  }
+  return { ok: true };
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  const documentUrlPatterns = [
+    "*://*.youtube.com/*",
+    "*://x.com/*",
+    "*://*.x.com/*",
+    "*://twitter.com/*",
+    "*://*.twitter.com/*",
+    "*://*.instagram.com/*",
+  ];
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: "sieve", title: "Sieve", contexts: ["all"], documentUrlPatterns });
+    const entries: [string, string][] = [
+      ["keep", "Not slop, keep this"],
+      ["drop", "Slop, dim this"],
+      ["keepCreator", "Always keep this creator"],
+      ["dropCreator", "Always dim this creator"],
+    ];
+    for (const [id, title] of entries) {
+      chrome.contextMenus.create({ id, parentId: "sieve", title, contexts: ["all"], documentUrlPatterns });
+    }
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (tab?.id === undefined || typeof info.menuItemId !== "string") return;
+  chrome.tabs
+    .sendMessage(tab.id, { type: "FEEDBACK", action: info.menuItemId }, { frameId: info.frameId ?? 0 })
+    .catch(() => undefined);
 });
 
 // The one place a rule or grader drop is decided, counted and logged (id -> reason).
@@ -100,7 +190,12 @@ async function evaluate(
   docKey: string,
   target?: { tabId: number; frameId: number },
 ): Promise<Map<string, string>> {
-  const dropped = await runSieveDetailed(items, config, seeds, memory, fetch, novelty, {
+  items.forEach(rememberRecent);
+  const graded: SieveConfig = {
+    ...config,
+    grader: { ...config.grader, rubric: config.grader.rubric + feedbackBlock(feedback) },
+  };
+  const dropped = await runSieveDetailed(items, graded, seeds, memory, fetch, novelty, {
     skipHold: !config.display.hideDropped,
     onGraderError: () => void stats.bumpDiag().catch(() => undefined),
     onLate: (late) => {
@@ -182,6 +277,22 @@ function handle(
       await stats.recordRemoved(res.hard).catch(() => undefined);
       return { body: res.body, dimmed: res.dimmed };
     });
+  }
+
+  if (raw.type === "USER_FEEDBACK") {
+    if (
+      !sender.tab ||
+      sender.id !== chrome.runtime.id ||
+      typeof raw.action !== "string" ||
+      !FEEDBACK_ACTIONS.includes(raw.action) ||
+      !Array.isArray(raw.ids) ||
+      raw.ids.length === 0 ||
+      raw.ids.length > 10 ||
+      !raw.ids.every((id): id is string => typeof id === "string" && id.length > 0 && id.length < 300)
+    ) {
+      return Promise.resolve({ ok: false, error: "bad request" });
+    }
+    return handleFeedback(raw.action, raw.ids, sender);
   }
 
   if (raw.type === "GET_STATUS") {

@@ -79,6 +79,7 @@ let dimSite: DimSite | undefined;
  * feed throw on re-render and go blank.
  */
 export function markCard(card: HTMLElement, reason: string, direct = false): void {
+  if (card.dataset.sieveKept === "1") return; // user said keep this one
   if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
   if (direct) card.dataset.sieveDimDirect = "1";
   if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
@@ -101,6 +102,7 @@ function scanDims(): void {
   if (!dimSite) return;
   for (const card of dimSite.cards()) {
     const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
+    if (card.dataset.sieveKept === "1") continue;
     if (reason) markCard(card, reason);
     else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
   }
@@ -135,6 +137,34 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
   chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
     if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
     if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed as DimEntry[]);
+  });
+  // Right-click feedback: remember what was clicked, apply the verdict when the menu item fires.
+  let lastContext: EventTarget | null = null;
+  document.addEventListener("contextmenu", (e) => (lastContext = e.target), true);
+  chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
+    if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
+    const action = msg.action;
+    if (!dimSite || !(lastContext instanceof Node) || typeof action !== "string") return;
+    const card = [...dimSite.cards()].find((c) => c.contains(lastContext as Node));
+    if (!card) return;
+    const ids = dimSite.idsOf(card);
+    const keep = action === "keep" || action === "keepCreator";
+    void chrome.runtime
+      .sendMessage({ type: "USER_FEEDBACK", action, ids })
+      .then((res: unknown) => {
+        if (!isRecord(res) || res.ok !== true) return;
+        if (keep) {
+          ids.forEach((id) => dimReasons.delete(id));
+          unmarkCard(card);
+          delete card.dataset.sieveDimDirect;
+          card.dataset.sieveKept = "1";
+        } else {
+          ids.forEach((id) => rememberDim(id, "you: slop"));
+          delete card.dataset.sieveKept;
+          markCard(card, "you: slop", true);
+        }
+      })
+      .catch(() => undefined);
   });
   const baseOnConfig = onConfig;
   onConfig = (cfg) => {

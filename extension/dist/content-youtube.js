@@ -483,6 +483,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   var DIM_CAP = 1500;
   var dimSite;
   function markCard(card, reason, direct = false) {
+    if (card.dataset.sieveKept === "1") return;
     if (card.dataset.sieveDim !== "1") card.dataset.sieveDim = "1";
     if (direct) card.dataset.sieveDimDirect = "1";
     if (card.dataset.sieveDimReason !== reason) card.dataset.sieveDimReason = reason;
@@ -502,6 +503,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (!dimSite) return;
     for (const card of dimSite.cards()) {
       const reason = dimSite.idsOf(card).map((id) => dimReasons.get(id)).find(Boolean);
+      if (card.dataset.sieveKept === "1") continue;
       if (reason) markCard(card, reason);
       else if (card.dataset.sieveDim === "1" && card.dataset.sieveDimDirect !== "1") unmarkCard(card);
     }
@@ -531,6 +533,30 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     chrome.runtime.onMessage.addListener((msg, sender) => {
       if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
       if (Array.isArray(msg.dimmed)) registerDimmed(msg.dimmed);
+    });
+    let lastContext = null;
+    document.addEventListener("contextmenu", (e) => lastContext = e.target, true);
+    chrome.runtime.onMessage.addListener((msg, sender) => {
+      if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
+      const action = msg.action;
+      if (!dimSite || !(lastContext instanceof Node) || typeof action !== "string") return;
+      const card = [...dimSite.cards()].find((c) => c.contains(lastContext));
+      if (!card) return;
+      const ids = dimSite.idsOf(card);
+      const keep = action === "keep" || action === "keepCreator";
+      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids }).then((res) => {
+        if (!isRecord(res) || res.ok !== true) return;
+        if (keep) {
+          ids.forEach((id) => dimReasons.delete(id));
+          unmarkCard(card);
+          delete card.dataset.sieveDimDirect;
+          card.dataset.sieveKept = "1";
+        } else {
+          ids.forEach((id) => rememberDim(id, "you: slop"));
+          delete card.dataset.sieveKept;
+          markCard(card, "you: slop", true);
+        }
+      }).catch(() => void 0);
     });
     const baseOnConfig = onConfig;
     onConfig = (cfg) => {
