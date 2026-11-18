@@ -1,5 +1,18 @@
-Sieve for Chrome (Teddy Warner's feed filter ported to Chrome) is on main of Milind's fork (milindanand13/sieve, PRs #1 to #6): right-click Sieve menu on any post (keep, dim, always keep/dim creator); user calls beat every rule and never expire; Sieve keeps up to 500 corrections and shows the grader the 30 most like each batch; user calls count double in creator learning (2 keeps or 3 dims teach a creator). Google Doc "Sieve for Chrome" is current.
-PR #3: every right-click shows ✓ or ! on the toolbar icon (hover says why) and writes sieveLastFeedback to storage, so a lost click is never silent. PR #4: on YouTube the hover preview player sits over the thumbnail outside the card, so the content script falls back to the card under the click position. PR #6: the post, its ids and text are captured at right-click time and the verdict is applied by id, so a scroll or a reused YouTube card can't hit the wrong post.
-Verified: tests pass, typecheck clean; live in Milind's main Chrome (Browser 2 in Claude in Chrome): YouTube dims render, and on 2026-11-18 Milind's right-click "keep" on KT #794 un-dimmed it and saved (sieveLastFeedback ok:true, sieveFeedback holds it). Debug storage by grepping Chrome's LevelDB in Default/Local Extension Settings/dmgdofklloigjlddpledopckcjjlocjl. Playwright (scratchpad pw/t2.mjs) passed on YouTube's real hover preview, scroll-between and off-card clicks. Read-only check on 2026-11-18: X dims 4 of 41 posts (0-1 false positives), layout fine; Instagram 0 of 103 dimmed, by design (followed accounts skip the grader, suggested posts are removed).
-Next: Milind reloads Sieve at chrome://extensions; the ponytail-audit for this milestone; `npm run fixtures` needs a sieve-samples.json export from the Options page. Possible: YouTube feedback text starts with the duration and "Now playing" overlay text, noise in learning examples.
-Risks: creator buttons fail on posts seen before the service worker slept ("no creator known", use Options); "Clear verdict cache" wipes right-click verdicts; X and Instagram internals change often; fixtures are gitignored.
+Sieve for Chrome (Teddy Warner's feed filter ported to Chrome) is on main of Milind's fork (milindanand13/sieve). It has a right-click Sieve menu (keep, dim, always keep/dim creator). User calls beat every rule and never expire, and the grader sees the 30 most similar of up to 500 corrections. The Google Doc "Sieve for Chrome" is current.
+2026-11-18 audit-fixes PR fixed all 20 ponytail-audit findings:
+- "Clear verdict cache" now keeps right-click post calls (it resets learned creator counts), and grader verdicts never overwrite them.
+- Dim CSS only applies while Sieve is on for that site.
+- Options/popup saves re-read storage, so they no longer clobber each other.
+- The XHR wrapper ignores a stale response after open() is called again.
+- REWRITE_RESPONSE checks the request host against the sender tab.
+- The grader runs one chunk at a time; X cadence drops respect the toggle.
+- Expired IndexedDB rows are deleted.
+- TikTok code and the activeTab/tabs permissions are removed.
+Verified: 94 tests pass, typecheck clean, and the build is rebuilt. Playwright (scratchpad pw/t2.mjs) passed right-click dim, undo, scroll-between and off-card clicks on live YouTube.
+Next: Milind reloads Sieve at chrome://extensions; `npm run fixtures` needs a sieve-samples.json export from the Options page. Open: a real single-transaction recordVerdicts; YouTube feedback text starts with the duration and "Now playing" overlay text.
+Risks:
+- X "!!" and "??" are no longer calmed, because calming them would shift the link/mention positions.
+- Instagram graphql is still intercepted broadly.
+- No test covers background/index.ts message handlers or the fetch wrapper.
+- The tiktok type and config keys remain.
+- X and Instagram internals change often, and fixtures are gitignored.

@@ -108,7 +108,7 @@ function requireElement<T extends HTMLElement>(
 
 async function initOptions(): Promise<void> {
   const stored = await chrome.storage.local.get("sieveConfig");
-  const config: SieveConfig = mergeConfig(stored.sieveConfig);
+  let config: SieveConfig = mergeConfig(stored.sieveConfig);
 
   const passFollowedEl = requireElement("pass-followed", HTMLInputElement);
   const hideDroppedEl = requireElement("hide-dropped", HTMLInputElement);
@@ -127,28 +127,40 @@ async function initOptions(): Promise<void> {
   const testResult = document.getElementById("test-result");
   const statsEl = document.getElementById("memory-stats");
 
+  // Skips the field being edited so a refresh from storage never clobbers typing.
   function populateFields(): void {
-    passFollowedEl.checked = config.passFollowed;
-    hideDroppedEl.checked = config.display.hideDropped;
-    recorderEl.checked = config.recorder.enabled;
-    noveltyFilterEl.checked = config.noveltyFilter;
-    modeEl.value = config.grader.mode;
-    holdEl.value = String(config.grader.streamHoldMs);
-    endpointEl.value = config.grader.endpoint;
-    modelEl.value = config.grader.model;
-    keyEl.value = config.grader.apiKey;
-    rubricEl.value = config.grader.rubric;
-    allowEl.value = config.allowHandles.join("\n");
-    blockEl.value = config.blockHandles.join("\n");
+    const idle = (el: Element): boolean => el !== document.activeElement;
+    if (idle(passFollowedEl)) passFollowedEl.checked = config.passFollowed;
+    if (idle(hideDroppedEl)) hideDroppedEl.checked = config.display.hideDropped;
+    if (idle(recorderEl)) recorderEl.checked = config.recorder.enabled;
+    if (idle(noveltyFilterEl)) noveltyFilterEl.checked = config.noveltyFilter;
+    if (idle(modeEl)) modeEl.value = config.grader.mode;
+    if (idle(holdEl)) holdEl.value = String(config.grader.streamHoldMs);
+    if (idle(endpointEl)) endpointEl.value = config.grader.endpoint;
+    if (idle(modelEl)) modelEl.value = config.grader.model;
+    if (idle(keyEl)) keyEl.value = config.grader.apiKey;
+    if (idle(rubricEl)) rubricEl.value = config.grader.rubric;
+    if (idle(allowEl)) allowEl.value = config.allowHandles.join("\n");
+    if (idle(blockEl)) blockEl.value = config.blockHandles.join("\n");
   }
+
+  // Picks up changes made elsewhere (popup toggles, right-click "always keep/dim this creator").
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.sieveConfig) return;
+    config = mergeConfig(changes.sieveConfig.newValue);
+    populateFields();
+  });
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   function scheduleSave(immediate = false): void {
     if (saveIndicator) saveIndicator.textContent = "saving...";
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
+    saveTimer = setTimeout(async () => {
+      // Re-read so changes made elsewhere since this tab opened are not written back stale.
+      const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
       // Old verdicts were graded under the old rubric, so drop them when it changes.
-      const rubricChanged = config.grader.rubric !== rubricEl.value;
+      const rubricChanged = fresh.grader.rubric !== rubricEl.value;
+      const config = fresh;
       config.display.hideDropped = hideDroppedEl.checked;
       config.recorder.enabled = recorderEl.checked;
       config.passFollowed = passFollowedEl.checked;
@@ -165,10 +177,9 @@ async function initOptions(): Promise<void> {
       config.allowHandles = parseLines(allowEl.value);
       config.blockHandles = parseLines(blockEl.value);
 
-      void chrome.storage.local.set({ sieveConfig: config }).then(() => {
-        if (saveIndicator) saveIndicator.textContent = "saved locally";
-        if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {});
-      });
+      await chrome.storage.local.set({ sieveConfig: config });
+      if (saveIndicator) saveIndicator.textContent = "saved locally";
+      if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {});
     }, immediate ? 0 : 180);
   }
 

@@ -204,13 +204,16 @@ export function createNoveltyMemory(): NoveltyMemory {
     const now = Date.now();
     return new Promise<void>((done) => {
     try {
-      const tx = db.transaction("dwelled", "readonly");
+      // Readwrite so expired rows are deleted instead of re-read on every wake.
+      const tx = db.transaction("dwelled", "readwrite");
       tx.oncomplete = () => done();
       tx.onerror = () => done();
       tx.onabort = () => done();
-      const req = tx.objectStore("dwelled").getAll();
+      const store = tx.objectStore("dwelled");
+      const req = store.getAll();
       req.onsuccess = () => {
         if (!Array.isArray(req.result)) return;
+        for (const r of req.result) if (isDwelledEntry(r) && now - r.at > NOVELTY_TTL_MS) store.delete(r.id);
         req.result
           .filter((r): r is DwelledEntry => isDwelledEntry(r) && now - r.at <= NOVELTY_TTL_MS)
           .slice(-MAX_NOVELTY_RECORDS)

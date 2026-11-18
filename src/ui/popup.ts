@@ -175,44 +175,6 @@ const PLATFORM_CARDS: PlatformCardSpec[] = [
       },
     ],
   },
-  {
-    id: "tiktok",
-    title: "tiktok",
-    enabledGet: (c) => c.tiktok.enabled,
-    enabledSet: (c, v) => {
-      c.tiktok.enabled = v;
-    },
-    switches: [
-      {
-        label: "caliber filter",
-        get: (c) => c.tiktok.caliberFilter,
-        set: (c, v) => {
-          c.tiktok.caliberFilter = v;
-        },
-      },
-      {
-        label: "clean sidebar & buttons",
-        get: (c) => c.tiktok.cleanChrome,
-        set: (c, v) => {
-          c.tiktok.cleanChrome = v;
-        },
-      },
-      {
-        label: "force light mode",
-        get: (c) => c.tiktok.lightMode,
-        set: (c, v) => {
-          c.tiktok.lightMode = v;
-        },
-      },
-      {
-        label: "post-only mode (hide feed)",
-        get: (c) => c.tiktok.postOnlyMode,
-        set: (c, v) => {
-          c.tiktok.postOnlyMode = v;
-        },
-      },
-    ],
-  },
 ];
 
 export function detectPlatformFromUrl(url?: string): Platform | null {
@@ -222,7 +184,6 @@ export function detectPlatformFromUrl(url?: string): Platform | null {
     if (host.endsWith("youtube.com")) return "youtube";
     if (host === "x.com" || host.endsWith(".x.com") || host.endsWith("twitter.com")) return "x";
     if (host.endsWith("instagram.com")) return "instagram";
-    if (host.endsWith("tiktok.com")) return "tiktok";
   } catch {
     return null;
   }
@@ -249,10 +210,12 @@ function makeSwitchInput(checked: boolean, onChange: (val: boolean) => void): HT
   return wrap;
 }
 
+type Save = (apply: (c: SieveConfig) => void) => Promise<void>;
+
 function renderSwitchRow(
   spec: SwitchSpec,
   config: SieveConfig,
-  save: () => Promise<void>,
+  save: Save,
 ): HTMLElement {
   const row = document.createElement("label");
   row.className = "row";
@@ -263,7 +226,7 @@ function renderSwitchRow(
 
   const toggle = makeSwitchInput(spec.get(config), (val) => {
     spec.set(config, val);
-    void save();
+    void save((c) => spec.set(c, val));
   });
 
   row.appendChild(text);
@@ -276,7 +239,7 @@ function renderCard(
   isOff: boolean,
   switches: SwitchSpec[],
   config: SieveConfig,
-  save: () => Promise<void>,
+  save: Save,
   headerAction?: HTMLElement,
 ): HTMLElement {
   const card = document.createElement("section");
@@ -302,7 +265,7 @@ function renderCard(
 
 async function initPopup(): Promise<void> {
   const stored = await chrome.storage.local.get("sieveConfig");
-  const config = mergeConfig(stored.sieveConfig);
+  let config = mergeConfig(stored.sieveConfig);
 
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const detected = detectPlatformFromUrl(tabs[0]?.url);
@@ -321,17 +284,26 @@ async function initPopup(): Promise<void> {
     siteLabel.textContent = matchedCard ? matchedCard.title : "all sites";
   }
 
-  const saveAndRerender = async () => {
-    await chrome.storage.local.set({ sieveConfig: config });
+  // Re-read and apply only the toggled field, so edits made elsewhere (options page, right-click) survive.
+  let saving: Promise<void> = Promise.resolve();
+  // Chained so two quick toggles don't both read the old config and undo each other.
+  const saveAndRerender: Save = (apply) => (saving = saving.then(async () => {
+    const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
+    apply(fresh);
+    await chrome.storage.local.set({ sieveConfig: fresh });
+    config = fresh;
     renderAll();
     updateStatusMode();
-  };
+  }).catch(() => {}));
 
   if (masterInput) {
     masterInput.checked = config.enabled;
     masterInput.addEventListener("change", () => {
       config.enabled = masterInput.checked;
-      void saveAndRerender();
+      const on = masterInput.checked;
+      void saveAndRerender((c) => {
+        c.enabled = on;
+      });
     });
   }
 
@@ -362,7 +334,7 @@ async function initPopup(): Promise<void> {
   ): void {
     const siteSwitch = makeSwitchInput(primarySpec.enabledGet(config), (val) => {
       primarySpec.enabledSet(config, val);
-      void saveAndRerender();
+      void saveAndRerender((c) => primarySpec.enabledSet(c, val));
     });
     mount.appendChild(
       renderCard(

@@ -14,7 +14,6 @@ const entries = [
   ["src/content/youtube.ts", "content-youtube.js"],
   ["src/content/twitter.ts", "content-twitter.js"],
   ["src/content/instagram.ts", "content-instagram.js"],
-  ["src/content/tiktok.ts", "content-tiktok.js"],
   ["src/ui/popup.ts", "popup.js"],
   ["src/ui/options.ts", "options.js"],
 ];

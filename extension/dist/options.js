@@ -288,7 +288,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   }
   async function initOptions() {
     const stored = await chrome.storage.local.get("sieveConfig");
-    const config = mergeConfig(stored.sieveConfig);
+    let config = mergeConfig(stored.sieveConfig);
     const passFollowedEl = requireElement("pass-followed", HTMLInputElement);
     const hideDroppedEl = requireElement("hide-dropped", HTMLInputElement);
     const recorderEl = requireElement("recorder-enabled", HTMLInputElement);
@@ -306,44 +306,51 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     const testResult = document.getElementById("test-result");
     const statsEl = document.getElementById("memory-stats");
     function populateFields() {
-      passFollowedEl.checked = config.passFollowed;
-      hideDroppedEl.checked = config.display.hideDropped;
-      recorderEl.checked = config.recorder.enabled;
-      noveltyFilterEl.checked = config.noveltyFilter;
-      modeEl.value = config.grader.mode;
-      holdEl.value = String(config.grader.streamHoldMs);
-      endpointEl.value = config.grader.endpoint;
-      modelEl.value = config.grader.model;
-      keyEl.value = config.grader.apiKey;
-      rubricEl.value = config.grader.rubric;
-      allowEl.value = config.allowHandles.join("\n");
-      blockEl.value = config.blockHandles.join("\n");
+      const idle = (el) => el !== document.activeElement;
+      if (idle(passFollowedEl)) passFollowedEl.checked = config.passFollowed;
+      if (idle(hideDroppedEl)) hideDroppedEl.checked = config.display.hideDropped;
+      if (idle(recorderEl)) recorderEl.checked = config.recorder.enabled;
+      if (idle(noveltyFilterEl)) noveltyFilterEl.checked = config.noveltyFilter;
+      if (idle(modeEl)) modeEl.value = config.grader.mode;
+      if (idle(holdEl)) holdEl.value = String(config.grader.streamHoldMs);
+      if (idle(endpointEl)) endpointEl.value = config.grader.endpoint;
+      if (idle(modelEl)) modelEl.value = config.grader.model;
+      if (idle(keyEl)) keyEl.value = config.grader.apiKey;
+      if (idle(rubricEl)) rubricEl.value = config.grader.rubric;
+      if (idle(allowEl)) allowEl.value = config.allowHandles.join("\n");
+      if (idle(blockEl)) blockEl.value = config.blockHandles.join("\n");
     }
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local" || !changes.sieveConfig) return;
+      config = mergeConfig(changes.sieveConfig.newValue);
+      populateFields();
+    });
     let saveTimer;
     function scheduleSave(immediate = false) {
       if (saveIndicator) saveIndicator.textContent = "saving...";
       if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        const rubricChanged = config.grader.rubric !== rubricEl.value;
-        config.display.hideDropped = hideDroppedEl.checked;
-        config.recorder.enabled = recorderEl.checked;
-        config.passFollowed = passFollowedEl.checked;
-        config.noveltyFilter = noveltyFilterEl.checked;
-        config.grader.mode = parseGraderMode(modeEl.value);
-        config.grader.streamHoldMs = Math.max(
+      saveTimer = setTimeout(async () => {
+        const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
+        const rubricChanged = fresh.grader.rubric !== rubricEl.value;
+        const config2 = fresh;
+        config2.display.hideDropped = hideDroppedEl.checked;
+        config2.recorder.enabled = recorderEl.checked;
+        config2.passFollowed = passFollowedEl.checked;
+        config2.noveltyFilter = noveltyFilterEl.checked;
+        config2.grader.mode = parseGraderMode(modeEl.value);
+        config2.grader.streamHoldMs = Math.max(
           100,
           Number.parseInt(holdEl.value, 10) || DEFAULT_CONFIG.grader.streamHoldMs
         );
-        config.grader.endpoint = endpointEl.value.trim();
-        config.grader.model = modelEl.value.trim();
-        config.grader.apiKey = keyEl.value.trim();
-        config.grader.rubric = rubricEl.value;
-        config.allowHandles = parseLines(allowEl.value);
-        config.blockHandles = parseLines(blockEl.value);
-        void chrome.storage.local.set({ sieveConfig: config }).then(() => {
-          if (saveIndicator) saveIndicator.textContent = "saved locally";
-          if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {
-          });
+        config2.grader.endpoint = endpointEl.value.trim();
+        config2.grader.model = modelEl.value.trim();
+        config2.grader.apiKey = keyEl.value.trim();
+        config2.grader.rubric = rubricEl.value;
+        config2.allowHandles = parseLines(allowEl.value);
+        config2.blockHandles = parseLines(blockEl.value);
+        await chrome.storage.local.set({ sieveConfig: config2 });
+        if (saveIndicator) saveIndicator.textContent = "saved locally";
+        if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {
         });
       }, immediate ? 0 : 180);
     }

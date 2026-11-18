@@ -177,7 +177,7 @@ describe("filterTwitterJson", () => {
 
     expect(seenYtIds).toEqual(["JXDEuBa_yeg"]);
     const tweet = payload.data.home.instructions[0]!.entries[0]!.content.itemContent.tweet_results.result;
-    expect(tweet.legacy.full_text).toBe("This FPGA talk is amazing! https://t.co/xyz");
+    expect(tweet.legacy.full_text).toBe("THIS FPGA TALK IS AMAZING!! https://t.co/xyz");
     expect(tweet.card.legacy.binding_values[2]!.value.image_value!.url).toBe(
       "https://i.ytimg.com/vi/JXDEuBa_yeg/hq2.jpg",
     );
@@ -337,7 +337,7 @@ describe("filterTwitterJson", () => {
                                     result: { legacy: { screen_name: "some_person", following: false } },
                                   },
                                 },
-                                legacy: { full_text: "NEW HARDWARE DROP TODAY!!" },
+                                legacy: { full_text: "NEW HARDWARE DROP TODAY!" },
                               },
                             },
                           },
@@ -474,5 +474,48 @@ describe("filterTwitterJson", () => {
       id: "3002",
       isFollowed: true,
     });
+  });
+
+  const entry = (id: string, text: string, extra: object = {}) => ({
+    entryId: `tweet-${id}`,
+    content: {
+      itemContent: {
+        tweet_results: {
+          result: {
+            rest_id: id,
+            core: { user_results: { result: { legacy: { screen_name: "u", following: false } } } },
+            legacy: { full_text: text, ...extra },
+          },
+        },
+      },
+    },
+  });
+  const timeline = (entries: unknown[]) => ({
+    data: { home: { home_timeline_urt: { instructions: [{ type: "TimelineAddEntries", entries }] } } },
+  });
+  const homeUrl = "/i/api/graphql/abc/HomeTimeline";
+
+  it("leaves tweet text alone when calming would shorten it and shift entity indices", async () => {
+    const text = "WOW!!! https://t.co/xyz";
+    const payload = timeline([
+      entry("1", text, { entities: { urls: [{ url: "https://t.co/xyz", indices: [7, 23] }] } }),
+    ]);
+    await filterTwitterJson(payload, homeUrl, DEFAULT_CONFIG, async () => new Set());
+    const e = payload.data.home.home_timeline_urt.instructions[0]!.entries[0] as ReturnType<typeof entry>;
+    expect(e.content.itemContent.tweet_results.result.legacy.full_text).toBe(text);
+  });
+
+  it("keeps cursor entries when every tweet is dropped", async () => {
+    const payload = timeline([
+      entry("1", "a"),
+      entry("2", "b"),
+      { entryId: "cursor-top-1", content: { cursorType: "Top", value: "t" } },
+      { entryId: "cursor-bottom-1", content: { cursorType: "Bottom", value: "b" } },
+    ]);
+    await filterTwitterJson(payload, homeUrl, DEFAULT_CONFIG, async () => new Set(["1", "2"]));
+    const ids = payload.data.home.home_timeline_urt.instructions[0]!.entries.map(
+      (x) => (x as { entryId: string }).entryId,
+    );
+    expect(ids).toEqual(["cursor-top-1", "cursor-bottom-1"]);
   });
 });

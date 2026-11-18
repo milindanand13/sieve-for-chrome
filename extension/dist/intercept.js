@@ -4,6 +4,14 @@
   var INTERCEPT_TAG = "sieve-intercept-v1";
   var MAX_STREAM_BYTES = 12 * 1024 * 1024;
   var REWRITE_TIMEOUT_MS = 6e3;
+  var X_TIMELINE_OPS = [
+    "HomeTimeline",
+    "HomeLatestTimeline",
+    "ExplorePage",
+    "GenericTimelineById",
+    "ExploreSidebar",
+    "SearchTimeline"
+  ];
   var INTERCEPT_URLS = [
     "https://www.youtube.com/youtubei/v1/browse*",
     "https://www.youtube.com/youtubei/v1/next*",
@@ -11,15 +19,14 @@
     "https://m.youtube.com/youtubei/v1/browse*",
     "https://m.youtube.com/youtubei/v1/next*",
     "https://m.youtube.com/youtubei/v1/search*",
-    "https://x.com/i/api/graphql/*",
-    "https://twitter.com/i/api/graphql/*",
+    ...["x.com", "twitter.com"].flatMap(
+      (h) => X_TIMELINE_OPS.map((op) => `https://${h}/i/api/graphql/*/${op}*`)
+    ),
     "https://www.instagram.com/graphql/query*",
     "https://www.instagram.com/api/v1/clips/home/*",
     "https://www.instagram.com/api/v1/feed/timeline/*",
     "https://i.instagram.com/api/v1/clips/home/*",
-    "https://i.instagram.com/api/v1/feed/timeline/*",
-    "https://www.tiktok.com/api/recommend/item_list/*",
-    "https://www.tiktok.com/api/post/item_list/*"
+    "https://i.instagram.com/api/v1/feed/timeline/*"
   ];
   var INTERCEPT_RES = INTERCEPT_URLS.map(
     (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
@@ -89,6 +96,7 @@
     #url = "";
     #released = false;
     #started = false;
+    #gen = 0;
     constructor() {
       super();
       for (const type of REPLAY) this.addEventListener(type, (e) => this.#gate(e), true);
@@ -97,6 +105,9 @@
       this.#url = absolute(String(url));
       this.#released = false;
       this.#started = false;
+      this.#gen++;
+      Reflect.deleteProperty(this, "responseText");
+      Reflect.deleteProperty(this, "response");
       super.open(method, url, ...rest);
     }
     #gate(e) {
@@ -112,10 +123,12 @@
       void this.#process();
     }
     async #process() {
+      const gen = this.#gen;
       try {
         const text = this.responseType === "json" ? JSON.stringify(this.response) : this.responseText;
         if (text.length <= MAX_STREAM_BYTES) {
           const out = await rewrite(this.#url, text);
+          if (gen !== this.#gen || this.readyState !== 4) return;
           if (out !== null && out !== text) {
             Object.defineProperty(this, "responseText", { value: out, configurable: true });
             const value = this.responseType === "json" ? JSON.parse(out) : out;
@@ -124,6 +137,7 @@
         }
       } catch {
       }
+      if (gen !== this.#gen || this.readyState !== 4) return;
       this.#released = true;
       this.dispatchEvent(new Event("readystatechange"));
       this.dispatchEvent(new ProgressEvent("load"));

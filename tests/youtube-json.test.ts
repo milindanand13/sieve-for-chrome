@@ -1,21 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/defaults.js";
-import { decodeUtf8Chunks } from "../src/adapters/stream-decode.js";
-import {
-  filterYouTubeJson,
-  rewriteYouTubeHtmlInitialData,
-} from "../src/adapters/youtube-json.js";
+import { filterYouTubeJson } from "../src/adapters/youtube-json.js";
 import type { FeedItem } from "../src/types.js";
-
-describe("decodeUtf8Chunks", () => {
-  it("reassembles multi-byte UTF-8 characters split across chunks without replacement chars", () => {
-    const encoded = new TextEncoder().encode('{"title":"π & 🛰️ balloon"}');
-    const c1 = encoded.slice(0, 15);
-    const c2 = encoded.slice(15, 18);
-    const c3 = encoded.slice(18);
-    expect(decodeUtf8Chunks([c1, c2, c3])).toBe('{"title":"π & 🛰️ balloon"}');
-  });
-});
 
 describe("filterYouTubeJson", () => {
   it("strips Shorts shelves, splices dropped videos, and calms/mid-frames kept videos", async () => {
@@ -293,37 +279,30 @@ describe("filterYouTubeJson", () => {
   });
 });
 
-describe("rewriteYouTubeHtmlInitialData", () => {
-  it("rewrites ytInitialData inside HTML and escapes closing script sequences safely", async () => {
-    const initial = {
-      contents: {
-        items: [
-          {
-            videoRenderer: {
-              videoId: "keepVid0001",
-              title: { simpleText: "Safe </script> tricky title" },
-            },
+describe("filterYouTubeJson continuation", () => {
+  it("keeps the continuationItemRenderer when every video is dropped", async () => {
+    const payload = {
+      onResponseReceivedActions: [
+        {
+          appendContinuationItemsAction: {
+            continuationItems: [
+              { videoRenderer: { videoId: "dropVid0001", title: { simpleText: "Ragebait one" } } },
+              { videoRenderer: { videoId: "dropVid0002", title: { simpleText: "Ragebait two" } } },
+              { continuationItemRenderer: { continuationEndpoint: { token: "next" } } },
+            ],
           },
-          {
-            videoRenderer: {
-              videoId: "dropVid0002",
-              title: { simpleText: "Ragebait garbage" },
-            },
-          },
-        ],
-      },
+        },
+      ],
     };
-    const html = `<!doctype html><html><body><script nonce="xyz">var ytInitialData = ${JSON.stringify(initial).replace("</script>", "<\\/script>")};</script></body></html>`;
-
-    const out = await rewriteYouTubeHtmlInitialData(
-      html,
+    const out = (await filterYouTubeJson(
+      payload,
+      "/youtubei/v1/browse",
       "https://www.youtube.com/",
       DEFAULT_CONFIG,
-      async () => new Set(["dropVid0002"]),
-    );
-
-    expect(out).toContain("keepVid0001");
-    expect(out).not.toContain("dropVid0002");
-    expect(out.match(/<\/script>/gi)).toHaveLength(1);
+      async () => new Set(["dropVid0001", "dropVid0002"]),
+    )) as typeof payload;
+    expect(out.onResponseReceivedActions[0]!.appendContinuationItemsAction.continuationItems).toEqual([
+      { continuationItemRenderer: { continuationEndpoint: { token: "next" } } },
+    ]);
   });
 });

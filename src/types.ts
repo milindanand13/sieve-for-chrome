@@ -125,10 +125,11 @@ export interface MemoryLookup {
 
 export interface MemoryStore extends MemoryLookup {
   recordVerdict(item: FeedItem, verdict: ResolvedVerdict, reason?: string): Promise<void>;
-  clear(): Promise<void>;
+  /** keepUser: keep the user's own verdicts (and creators), drop grader-made ones. */
+  clear(options?: { keepUser?: boolean }): Promise<void>;
   /** Resolves once persisted rows are loaded (service worker wake). */
   ready?: Promise<void>;
-  counts(): { cachedItems: number; learnedCreators: number; droppedTotal: number };
+  counts(): { cachedItems: number; learnedCreators: number };
 }
 
 export interface NoveltyLookup {

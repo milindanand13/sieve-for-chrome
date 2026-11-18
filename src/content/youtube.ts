@@ -43,6 +43,8 @@ async function resolveVagueDomTitles(): Promise<void> {
         return;
       }
       if (!vid || dearrowCheckedVideos.has(vid)) return;
+      // Over the 16-id request cap: leave unchecked so a later pass retries it.
+      if (titleElsByVid.size >= 16 && !titleElsByVid.has(vid)) return;
 
       const titleEl = card.querySelector<HTMLElement>(
         "#video-title, .yt-lockup-metadata-view-model__title",
@@ -116,7 +118,7 @@ async function evaluateUnfilteredDomCards(): Promise<void> {
   if (isYouTubeSafeRoute(window.location.href)) return;
 
   const cards = document.querySelectorAll<HTMLElement>(
-    "ytd-rich-item-renderer:not([data-sieve-yt-dropped]), ytd-compact-video-renderer:not([data-sieve-yt-dropped])",
+    "ytd-rich-item-renderer, ytd-compact-video-renderer",
   );
   const batch: FeedItem[] = [];
   const cardById = new Map<string, HTMLElement>();
@@ -130,12 +132,13 @@ async function evaluateUnfilteredDomCards(): Promise<void> {
     } catch {
       return;
     }
-    if (!vid || evaluatedDomVideos.has(vid)) return;
+    if (!vid || card.dataset.sieveSeen === vid || evaluatedDomVideos.has(vid)) return;
     const titleEl = card.querySelector<HTMLElement>(
       "#video-title, .yt-lockup-metadata-view-model__title, h3",
     );
     const title = titleEl?.textContent?.trim() ?? "";
     if (!title || !rememberBounded(evaluatedDomVideos, vid)) return;
+    card.dataset.sieveSeen = vid; // set after the title loads; cards are reused, so key by id
 
     const chanLink = card.querySelector<HTMLAnchorElement>('a[href^="/@"], a[href^="/channel/"]');
     const href = chanLink?.getAttribute("href") ?? "";
@@ -264,7 +267,7 @@ bootSiteAdapter((cfg) => {
     sieveYtHeader: ytOn && cfg.youtube.cleanHeader ? "1" : "0",
   });
   handleNavigationChange();
-});
+}, (cfg) => cfg.enabled && cfg.youtube.enabled);
 
 window.addEventListener("yt-navigate-start", (event) => {
   const detail = event instanceof CustomEvent && isRecord(event.detail) ? event.detail : null;
@@ -285,11 +288,13 @@ window.addEventListener("yt-navigate-finish", handleNavigationChange);
 window.addEventListener("popstate", handleNavigationChange);
 document.addEventListener("fullscreenchange", syncTheaterHeaderTheme);
 
-const observer = new MutationObserver(() => {
-  if (activeConfig?.enabled && activeConfig.youtube.enabled) {
-    syncTheaterHeaderTheme();
-    schedulePolish();
-  }
+const observer = new MutationObserver((records) => {
+  if (!activeConfig?.enabled || !activeConfig.youtube.enabled) return;
+  // hidden/style churn on the player and progress bar must not rerun feed passes; only the watch page's own attributes matter.
+  const structural = records.some((r) => r.type === "childList");
+  if (!structural && !records.some((r) => (r.target as Element).localName === "ytd-watch-flexy")) return;
+  syncTheaterHeaderTheme();
+  if (structural) schedulePolish();
 });
 
 if (document.documentElement) {

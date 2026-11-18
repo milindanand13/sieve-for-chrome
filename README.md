@@ -6,7 +6,7 @@ Original by Teddy Warner: [Twarner491/sieve](https://github.com/Twarner491/sieve
 
 ![Sieve on YouTube, Twitter, Instagram, and TikTok](docs/images/sieve-example.png)
 
-Sieve filters YouTube, X, and Instagram. TikTok code is included but off by default.
+Sieve filters YouTube, X, and Instagram.
 
 ---
 

@@ -198,11 +198,17 @@ Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`
     for (const [id, v] of verdicts) if (v.verdict === "d") dropped.add(id);
     return dropped;
   }
+  var chunkQueue = Promise.resolve();
+  function queued(fn) {
+    const next = chunkQueue.then(fn, fn);
+    chunkQueue = next.catch(() => void 0);
+    return next;
+  }
   async function gradeItemsDetailed(items, config2, fetchImpl = fetch) {
     const out = /* @__PURE__ */ new Map();
     for (let i = 0; i < items.length; i += MAX_BATCH_SIZE) {
       try {
-        for (const [id, v] of await gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config2, fetchImpl)) {
+        for (const [id, v] of await queued(() => gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config2, fetchImpl))) {
           out.set(id, v);
         }
       } catch (err) {
@@ -851,7 +857,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (!item.isFollowed) {
       if (item.platform === "x" && config2.x.slopCadenceFilter) {
         if (isStructuralSlop(item.titleOrText, {}, 65)) return DROP("slop cadence");
-      } else if (item.platform !== "youtube") {
+      } else if (item.platform !== "youtube" && item.platform !== "x") {
         if (isStructuralSlop(item.titleOrText, {}, 74)) return DROP("slop cadence");
       }
       if (config2.noveltyFilter && novelty2?.isRedundantRehash(item.titleOrText)) {
@@ -902,13 +908,14 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     }
     const holdMs = Math.max(50, config2.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
     const gradingPromise = gradeItemsDetailed(uncertain, config2, fetchImpl).then(async (verdicts) => {
-      for (const item of uncertain) {
-        const g = verdicts.get(item.id);
-        if (g?.verdict === "k") await memory2.recordVerdict(item, "keep");
-        else if (g?.verdict === "d") {
-          await memory2.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
-        }
-      }
+      await Promise.all(
+        uncertain.map((item) => {
+          const g = verdicts.get(item.id);
+          if (g?.verdict === "k") return memory2.recordVerdict(item, "keep");
+          if (g?.verdict === "d") return memory2.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
+          return void 0;
+        })
+      );
       return verdicts;
     }).catch((err) => {
       hooks.onGraderError?.(err);
@@ -970,30 +977,33 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     const maxItems = options.maxItems ?? 5e4;
     const items = /* @__PURE__ */ new Map();
     const creators = /* @__PURE__ */ new Map();
-    let droppedTotal = 0;
     const dbPromise = openDb();
     const ready2 = dbPromise.then((db) => {
       if (!db) return;
       const now = Date.now();
       return new Promise((done2) => {
         try {
-          const tx = db.transaction(["items", "creators"], "readonly");
-          const itemReq = tx.objectStore("items").getAll();
+          const tx = db.transaction(["items", "creators"], "readwrite");
+          const itemStore = tx.objectStore("items");
+          const itemReq = itemStore.getAll();
           itemReq.onsuccess = () => {
             if (!Array.isArray(itemReq.result)) return;
+            const live = [];
             for (const row of itemReq.result) {
-              if (isStoredVerdict(row) && !expired(row, now) && items.size < maxItems) {
-                items.set(row.key, row);
-              }
+              if (!isStoredVerdict(row)) continue;
+              if (expired(row, now)) itemStore.delete(row.key);
+              else live.push(row);
             }
+            for (const row of live.sort((a, b) => a.at - b.at).slice(-maxItems)) items.set(row.key, row);
           };
-          const creatorReq = tx.objectStore("creators").getAll();
+          const creatorStore = tx.objectStore("creators");
+          const creatorReq = creatorStore.getAll();
           creatorReq.onsuccess = () => {
             if (!Array.isArray(creatorReq.result)) return;
             for (const row of creatorReq.result) {
-              if (isCreatorRecord(row) && now - row.updatedAt <= CREATOR_TTL_MS) {
-                creators.set(row.key, row);
-              }
+              if (!isCreatorRecord(row)) continue;
+              if (now - row.updatedAt <= CREATOR_TTL_MS) creators.set(row.key, row);
+              else creatorStore.delete(row.key);
             }
           };
           tx.oncomplete = () => done2();
@@ -1043,9 +1053,9 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         return evaluateCreatorRecord(creators.get(creatorMapKey(platform, normalized)));
       },
       async recordVerdict(item, verdict, reason) {
-        if (verdict === "drop") droppedTotal += 1;
         const now = Date.now();
         const iKey = itemMapKey(item.platform, item.id);
+        if (!reason?.startsWith("you: ") && items.get(iKey)?.reason?.startsWith("you: ")) return;
         const entry = { key: iKey, verdict, at: now, ...reason ? { reason } : {} };
         const repeat = !!reason?.startsWith("you: ") && items.get(iKey)?.reason === reason;
         if (items.has(iKey)) items.delete(iKey);
@@ -1086,16 +1096,26 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         } catch {
         }
       },
-      async clear() {
-        items.clear();
+      async clear(options2 = {}) {
+        for (const [k, v] of items) if (!options2.keepUser || !v.reason?.startsWith("you: ")) items.delete(k);
         creators.clear();
-        droppedTotal = 0;
         const db = await dbPromise;
         if (!db) return;
         try {
           const tx = db.transaction(["items", "creators"], "readwrite");
-          tx.objectStore("items").clear();
-          tx.objectStore("creators").clear();
+          if (options2.keepUser) {
+            const cursorReq = tx.objectStore("items").openCursor();
+            cursorReq.onsuccess = () => {
+              const cur = cursorReq.result;
+              if (!cur) return;
+              if (!cur.value.reason?.startsWith("you: ")) cur.delete();
+              cur.continue();
+            };
+            tx.objectStore("creators").clear();
+          } else {
+            tx.objectStore("items").clear();
+            tx.objectStore("creators").clear();
+          }
         } catch {
         }
       },
@@ -1106,8 +1126,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         }
         return {
           cachedItems: items.size,
-          learnedCreators,
-          droppedTotal
+          learnedCreators
         };
       }
     };
@@ -1296,13 +1315,15 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       const now = Date.now();
       return new Promise((done2) => {
         try {
-          const tx = db.transaction("dwelled", "readonly");
+          const tx = db.transaction("dwelled", "readwrite");
           tx.oncomplete = () => done2();
           tx.onerror = () => done2();
           tx.onabort = () => done2();
-          const req = tx.objectStore("dwelled").getAll();
+          const store = tx.objectStore("dwelled");
+          const req = store.getAll();
           req.onsuccess = () => {
             if (!Array.isArray(req.result)) return;
+            for (const r of req.result) if (isDwelledEntry(r) && now - r.at > NOVELTY_TTL_MS) store.delete(r.id);
             req.result.filter((r) => isDwelledEntry(r) && now - r.at <= NOVELTY_TTL_MS).slice(-MAX_NOVELTY_RECORDS).forEach((r) => {
               entries.push({ id: r.id, tokenSet: new Set(r.tokens), at: r.at });
             });
@@ -1672,73 +1693,6 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     return data;
   }
 
-  // src/adapters/tiktok-json.ts
-  function isTikTokProfileOrDirectRoute(urlPath, pageUrl) {
-    if (urlPath.includes("/api/post/item_list")) return true;
-    if (!pageUrl) return false;
-    try {
-      const pathname = new URL(pageUrl).pathname;
-      return /(?:^|\/)@[^/]+/.test(pathname);
-    } catch {
-      return false;
-    }
-  }
-  async function filterTikTokJson(data, config2, decide, urlPath = "", pageUrl = "") {
-    if (!config2.enabled || !config2.tiktok.enabled) return data;
-    if (!isRecord(data) || !Array.isArray(data.itemList)) return data;
-    const isProfileSurface = isTikTokProfileOrDirectRoute(urlPath, pageUrl);
-    if (config2.tiktok.postOnlyMode && !isProfileSurface) {
-      data.itemList = [];
-      return data;
-    }
-    const list = data.itemList;
-    const candidates = /* @__PURE__ */ new Map();
-    for (let i = 0; i < list.length; i++) {
-      const raw = list[i];
-      if (!isRecord(raw)) continue;
-      if (raw.isAd === true || isRecord(raw.adInfo)) {
-        list.splice(i, 1);
-        i--;
-        continue;
-      }
-      const desc = typeof raw.desc === "string" ? raw.desc : "";
-      if (typeof raw.desc === "string") {
-        raw.desc = calmTitle(raw.desc);
-      }
-      if (!config2.tiktok.caliberFilter || isProfileSurface) continue;
-      const id = typeof raw.id === "string" ? raw.id : "";
-      if (!id) continue;
-      const author = isRecord(raw.author) ? raw.author : {};
-      const stats2 = isRecord(raw.stats) ? raw.stats : {};
-      const video = isRecord(raw.video) ? raw.video : {};
-      const followStatus = typeof author.followStatus === "number" ? author.followStatus : 0;
-      candidates.set(id, {
-        platform: "tiktok",
-        id,
-        creatorId: typeof author.id === "string" ? author.id : void 0,
-        creatorHandle: typeof author.uniqueId === "string" ? author.uniqueId : void 0,
-        isFollowed: followStatus === 1 || followStatus === 2,
-        surface: "reels",
-        titleOrText: desc || `@${typeof author.uniqueId === "string" ? author.uniqueId : "tiktok"}`,
-        durationSec: typeof video.duration === "number" ? video.duration : void 0,
-        metrics: {
-          likes: typeof stats2.diggCount === "number" ? stats2.diggCount : void 0,
-          replies: typeof stats2.commentCount === "number" ? stats2.commentCount : void 0
-        }
-      });
-    }
-    if (candidates.size === 0) return data;
-    const droppedIds = await decide([...candidates.values()]);
-    if (droppedIds.size === 0) return data;
-    for (let i = list.length - 1; i >= 0; i--) {
-      const entry = list[i];
-      if (isRecord(entry) && typeof entry.id === "string" && droppedIds.has(entry.id)) {
-        list.splice(i, 1);
-      }
-    }
-    return data;
-  }
-
   // src/adapters/twitter-json.ts
   var NOISE_ENTRY_PREFIXES = [
     "promoted-",
@@ -1844,12 +1798,16 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     }
     return parts.length > 0 ? parts.join(" | ") : void 0;
   }
+  function calmSameLength(text) {
+    const calmed = calmTitle(text);
+    return calmed.length === text.length ? calmed : text;
+  }
   function polishTweetPresentation(tweet, config2, ytIds) {
     if (isRecord(tweet.legacy) && typeof tweet.legacy.full_text === "string") {
-      tweet.legacy.full_text = calmTitle(tweet.legacy.full_text);
+      tweet.legacy.full_text = calmSameLength(tweet.legacy.full_text);
     }
     if (isRecord(tweet.note_tweet) && isRecord(tweet.note_tweet.note_tweet_results) && isRecord(tweet.note_tweet.note_tweet_results.result) && typeof tweet.note_tweet.note_tweet_results.result.text === "string") {
-      tweet.note_tweet.note_tweet_results.result.text = calmTitle(
+      tweet.note_tweet.note_tweet_results.result.text = calmSameLength(
         tweet.note_tweet.note_tweet_results.result.text
       );
     }
@@ -2298,6 +2256,19 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
       }
     }
   }
+  function pruneChildren(node, visit) {
+    let lostPrimaryContent = false;
+    for (const key of Object.keys(node)) {
+      const childBecameEmpty = visit(node[key]);
+      if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
+        delete node[key];
+        if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
+          lostPrimaryContent = true;
+        }
+      }
+    }
+    return lostPrimaryContent || Object.keys(node).length === 0;
+  }
   async function filterYouTubeJson(data, urlPath, pageUrl, config2, decide, sink) {
     if (!config2.enabled || !config2.youtube.enabled) return data;
     if (!isRecord(data) && !Array.isArray(data)) return data;
@@ -2363,17 +2334,7 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
           candidates.set(item.id, item);
         }
       }
-      let lostPrimaryContent = false;
-      for (const key of Object.keys(node)) {
-        const childBecameEmpty = collectAndStripNoise(node[key]);
-        if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
-          delete node[key];
-          if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
-            lostPrimaryContent = true;
-          }
-        }
-      }
-      return lostPrimaryContent || Object.keys(node).length === 0;
+      return pruneChildren(node, collectAndStripNoise);
     }
     collectAndStripNoise(data);
     const droppedIds = candidates.size > 0 ? await decide([...candidates.values()]) : /* @__PURE__ */ new Set();
@@ -2407,29 +2368,51 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
         }
         dehypeVideoRenderer(renderer, config2);
       }
-      let lostPrimaryContent = false;
-      for (const key of Object.keys(node)) {
-        const childBecameEmpty = applyVerdictsAndDehype(node[key]);
-        if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
-          delete node[key];
-          if (key === "content" || key === "contents" || key === "richShelfRenderer" || key === "richItemRenderer" || key === "shelfRenderer") {
-            lostPrimaryContent = true;
-          }
-        }
-      }
-      return lostPrimaryContent || Object.keys(node).length === 0;
+      return pruneChildren(node, applyVerdictsAndDehype);
     }
     applyVerdictsAndDehype(data);
     return data;
   }
 
+  // src/shared/intercept.ts
+  var MAX_STREAM_BYTES = 12 * 1024 * 1024;
+  var X_TIMELINE_OPS = [
+    "HomeTimeline",
+    "HomeLatestTimeline",
+    "ExplorePage",
+    "GenericTimelineById",
+    "ExploreSidebar",
+    "SearchTimeline"
+  ];
+  var INTERCEPT_URLS = [
+    "https://www.youtube.com/youtubei/v1/browse*",
+    "https://www.youtube.com/youtubei/v1/next*",
+    "https://www.youtube.com/youtubei/v1/search*",
+    "https://m.youtube.com/youtubei/v1/browse*",
+    "https://m.youtube.com/youtubei/v1/next*",
+    "https://m.youtube.com/youtubei/v1/search*",
+    ...["x.com", "twitter.com"].flatMap(
+      (h) => X_TIMELINE_OPS.map((op) => `https://${h}/i/api/graphql/*/${op}*`)
+    ),
+    "https://www.instagram.com/graphql/query*",
+    "https://www.instagram.com/api/v1/clips/home/*",
+    "https://www.instagram.com/api/v1/feed/timeline/*",
+    "https://i.instagram.com/api/v1/clips/home/*",
+    "https://i.instagram.com/api/v1/feed/timeline/*"
+  ];
+  var INTERCEPT_RES = INTERCEPT_URLS.map(
+    (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
+  );
+  function matchesInterceptUrl(url) {
+    return INTERCEPT_RES.some((re) => re.test(url));
+  }
+
   // src/background/rewrite.ts
-  var TWITTER_TIMELINE_RE = /\/i\/api\/graphql\/[^/]+\/(HomeTimeline|HomeLatestTimeline|ExplorePage|GenericTimelineById|ExploreSidebar|SearchTimeline)/;
+  var TWITTER_TIMELINE_RE = new RegExp(`/i/api/graphql/[^/]+/(${X_TIMELINE_OPS.join("|")})`);
   function siteForHost(host) {
     if (host.endsWith("youtube.com")) return "youtube";
     if (host === "x.com" || host === "twitter.com") return "x";
     if (host.endsWith("instagram.com")) return "instagram";
-    if (host.endsWith("tiktok.com")) return "tiktok";
     return null;
   }
   function shouldFilterUrl(url, config2) {
@@ -2442,8 +2425,6 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
         return config2.x.enabled && TWITTER_TIMELINE_RE.test(path);
       case "instagram":
         return config2.instagram.enabled && (path === "/graphql/query" || path.startsWith("/api/v1/clips/home") || path.startsWith("/api/v1/feed/timeline"));
-      case "tiktok":
-        return config2.tiktok.enabled && (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"));
       default:
         return false;
     }
@@ -2472,8 +2453,6 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
         out = await filterTwitterJson(json, path, config2, decide, sink);
       } else if (site === "instagram") {
         out = await filterInstagramJson(json, path, config2, decide, pageUrl, sink);
-      } else if (site === "tiktok") {
-        out = await filterTikTokJson(json, config2, decide, path, pageUrl);
       }
       return { body: JSON.stringify(out), dimmed: sink.dimmed, hard: sink.hard };
     } catch {
@@ -2488,6 +2467,7 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
   var LOG_CAP = 2e3;
   var MAX_DAYS = 400;
   var MAX_DOC_SESSIONS = 50;
+  var reasonKey = (r) => r.startsWith("grader") ? "grader" : r.replace(/ \(cached\)$/, "");
   var emptyCounts = () => ({ seen: 0, dimmed: 0, removed: 0, reasons: {} });
   function dayKey(ms) {
     const d = new Date(ms);
@@ -2534,7 +2514,8 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
             const reason = dropped.get(item.id);
             if (reason !== void 0) {
               c.dimmed += 1;
-              c.reasons[reason] = (c.reasons[reason] ?? 0) + 1;
+              const rk = reasonKey(reason);
+              c.reasons[rk] = (c.reasons[rk] ?? 0) + 1;
               logAdds.push({ site: item.platform, text: snippet(item.titleOrText), reason, time: t });
             }
           }
@@ -2572,32 +2553,6 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
       if (logAdds.length > 0) update[LOG_KEY] = [...await readLog(), ...logAdds].slice(-LOG_CAP);
       await kv.set(update);
     }
-  }
-
-  // src/shared/intercept.ts
-  var MAX_STREAM_BYTES = 12 * 1024 * 1024;
-  var INTERCEPT_URLS = [
-    "https://www.youtube.com/youtubei/v1/browse*",
-    "https://www.youtube.com/youtubei/v1/next*",
-    "https://www.youtube.com/youtubei/v1/search*",
-    "https://m.youtube.com/youtubei/v1/browse*",
-    "https://m.youtube.com/youtubei/v1/next*",
-    "https://m.youtube.com/youtubei/v1/search*",
-    "https://x.com/i/api/graphql/*",
-    "https://twitter.com/i/api/graphql/*",
-    "https://www.instagram.com/graphql/query*",
-    "https://www.instagram.com/api/v1/clips/home/*",
-    "https://www.instagram.com/api/v1/feed/timeline/*",
-    "https://i.instagram.com/api/v1/clips/home/*",
-    "https://i.instagram.com/api/v1/feed/timeline/*",
-    "https://www.tiktok.com/api/recommend/item_list/*",
-    "https://www.tiktok.com/api/post/item_list/*"
-  ];
-  var INTERCEPT_RES = INTERCEPT_URLS.map(
-    (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
-  );
-  function matchesInterceptUrl(url) {
-    return INTERCEPT_RES.some((re) => re.test(url));
   }
 
   // src/background/index.ts
@@ -2664,6 +2619,7 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
   var FEEDBACK_CAP = 500;
   var RECENT_CAP = 3e3;
   var recentItems = /* @__PURE__ */ new Map();
+  var PLATFORMS = ["youtube", "x", "instagram", "tiktok"];
   var FEEDBACK_ACTIONS = ["keep", "drop", "keepCreator", "dropCreator"];
   function parseFeedback(raw) {
     if (!Array.isArray(raw)) return [];
@@ -2770,7 +2726,7 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
         chrome.tabs.sendMessage(target.tabId, { type: "LATE_DIMS", dimmed }, { frameId: target.frameId }).catch(() => void 0);
       }
     });
-    await stats.record(docKey, items, dropped).catch(() => void 0);
+    void stats.record(docKey, items, dropped).catch(() => void 0);
     if (dropped.size > 0) await setSessionCount(await getSessionCount() + dropped.size);
     return dropped;
   }
@@ -2798,16 +2754,22 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
   function handle(raw, sender) {
     if (!isRecord(raw) || typeof raw.type !== "string") return void 0;
     if (raw.type === "REWRITE_RESPONSE") {
-      if (!sender.tab || typeof raw.url !== "string" || typeof raw.pageUrl !== "string" || typeof raw.body !== "string" || raw.body.length > MAX_STREAM_BYTES || !matchesInterceptUrl(raw.url)) {
+      let sameSite = false;
+      try {
+        const site = siteForHost(new URL(String(raw.url)).hostname);
+        sameSite = !!site && site === siteForHost(new URL(sender.url ?? sender.tab?.url ?? "").hostname);
+      } catch {
+      }
+      if (!sameSite || !sender.tab || typeof raw.url !== "string" || typeof raw.pageUrl !== "string" || typeof raw.body !== "string" || raw.body.length > MAX_STREAM_BYTES || !matchesInterceptUrl(raw.url)) {
         return Promise.resolve({ body: null });
       }
       const docKey = docKeyOf(sender);
-      return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, {
+      return rewriteResponseBody(raw.url, sender.url ?? raw.pageUrl, raw.body, config, {
         evaluate: (items) => evaluate(items, docKey, targetOf(sender)),
         recordFixture: addFixture
       }).then(async (res) => {
         if (!res) return { body: null };
-        await stats.recordRemoved(res.hard).catch(() => void 0);
+        void stats.recordRemoved(res.hard).catch(() => void 0);
         return { body: res.body, dimmed: res.dimmed };
       });
     }
@@ -2837,11 +2799,11 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
       return Promise.all([setSessionCount(0), memory.clear()]).then(() => ({ ok: true }));
     }
     if (raw.type === "CLEAR_VERDICT_CACHE") {
-      return memory.clear().then(() => ({ ok: true }));
+      return memory.clear({ keepUser: true }).then(() => ({ ok: true }));
     }
     if (raw.type === "RECORD_DWELL" && typeof raw.text === "string") {
       if (config.enabled && config.noveltyFilter) {
-        novelty.recordDwelled(raw.text);
+        novelty.recordDwelled(raw.text.slice(0, 2e3));
       }
       return Promise.resolve({ ok: true });
     }
@@ -2857,8 +2819,8 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
       );
     }
     if (raw.type === "EVALUATE_SSR_ITEMS" && Array.isArray(raw.items)) {
-      const items = raw.items.filter(
-        (item) => isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string"
+      const items = raw.items.slice(0, 500).filter(
+        (item) => isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string" && PLATFORMS.includes(item.platform)
       );
       return evaluate(items, docKeyOf(sender), targetOf(sender)).then(
         (dropped) => ({

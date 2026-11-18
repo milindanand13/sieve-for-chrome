@@ -301,44 +301,6 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
           }
         }
       ]
-    },
-    {
-      id: "tiktok",
-      title: "tiktok",
-      enabledGet: (c) => c.tiktok.enabled,
-      enabledSet: (c, v) => {
-        c.tiktok.enabled = v;
-      },
-      switches: [
-        {
-          label: "caliber filter",
-          get: (c) => c.tiktok.caliberFilter,
-          set: (c, v) => {
-            c.tiktok.caliberFilter = v;
-          }
-        },
-        {
-          label: "clean sidebar & buttons",
-          get: (c) => c.tiktok.cleanChrome,
-          set: (c, v) => {
-            c.tiktok.cleanChrome = v;
-          }
-        },
-        {
-          label: "force light mode",
-          get: (c) => c.tiktok.lightMode,
-          set: (c, v) => {
-            c.tiktok.lightMode = v;
-          }
-        },
-        {
-          label: "post-only mode (hide feed)",
-          get: (c) => c.tiktok.postOnlyMode,
-          set: (c, v) => {
-            c.tiktok.postOnlyMode = v;
-          }
-        }
-      ]
     }
   ];
   function detectPlatformFromUrl(url) {
@@ -348,7 +310,6 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       if (host.endsWith("youtube.com")) return "youtube";
       if (host === "x.com" || host.endsWith(".x.com") || host.endsWith("twitter.com")) return "x";
       if (host.endsWith("instagram.com")) return "instagram";
-      if (host.endsWith("tiktok.com")) return "tiktok";
     } catch {
       return null;
     }
@@ -378,7 +339,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     text.textContent = spec.label;
     const toggle = makeSwitchInput(spec.get(config), (val) => {
       spec.set(config, val);
-      void save();
+      void save((c) => spec.set(c, val));
     });
     row.appendChild(text);
     row.appendChild(toggle);
@@ -405,7 +366,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   }
   async function initPopup() {
     const stored = await chrome.storage.local.get("sieveConfig");
-    const config = mergeConfig(stored.sieveConfig);
+    let config = mergeConfig(stored.sieveConfig);
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const detected = detectPlatformFromUrl(tabs[0]?.url);
     const siteLabel = document.getElementById("active-site");
@@ -420,16 +381,24 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       const matchedCard = PLATFORM_CARDS.find((p) => p.id === detected);
       siteLabel.textContent = matchedCard ? matchedCard.title : "all sites";
     }
-    const saveAndRerender = async () => {
-      await chrome.storage.local.set({ sieveConfig: config });
+    let saving = Promise.resolve();
+    const saveAndRerender = (apply) => saving = saving.then(async () => {
+      const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
+      apply(fresh);
+      await chrome.storage.local.set({ sieveConfig: fresh });
+      config = fresh;
       renderAll();
       updateStatusMode();
-    };
+    }).catch(() => {
+    });
     if (masterInput) {
       masterInput.checked = config.enabled;
       masterInput.addEventListener("change", () => {
         config.enabled = masterInput.checked;
-        void saveAndRerender();
+        const on = masterInput.checked;
+        void saveAndRerender((c) => {
+          c.enabled = on;
+        });
       });
     }
     if (detailsEl && indicatorEl) {
@@ -453,7 +422,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     function renderActivePlatformView(primarySpec, mount, otherMount) {
       const siteSwitch = makeSwitchInput(primarySpec.enabledGet(config), (val) => {
         primarySpec.enabledSet(config, val);
-        void saveAndRerender();
+        void saveAndRerender((c) => primarySpec.enabledSet(c, val));
       });
       mount.appendChild(
         renderCard(

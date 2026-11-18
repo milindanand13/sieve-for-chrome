@@ -1,16 +1,16 @@
 /* Graded drops stay in the page: dimmed, labelled, still clickable. display.hideDropped hides them.
    The label is an absolutely positioned pseudo-element: it must not take part in the card's
    grid/flex layout, and no nodes are ever inserted into React-managed feeds. */
-[data-sieve-dim="1"] {
+html[data-sieve-active="1"] [data-sieve-dim="1"] {
   position: relative;
 }
 
-[data-sieve-dim="1"] > * {
+html[data-sieve-active="1"] [data-sieve-dim="1"] > * {
   opacity: 0.25;
   filter: grayscale(1);
 }
 
-[data-sieve-dim="1"]::before {
+html[data-sieve-active="1"] [data-sieve-dim="1"]::before {
   content: "sieve: " attr(data-sieve-dim-reason);
   position: absolute;
   top: 4px;
@@ -29,6 +29,6 @@
   pointer-events: none;
 }
 
-html[data-sieve-hide="1"] [data-sieve-dim="1"] {
+html[data-sieve-active="1"][data-sieve-hide="1"] [data-sieve-dim="1"] {
   display: none !important;
 }

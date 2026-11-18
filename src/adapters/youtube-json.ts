@@ -278,6 +278,27 @@ function dehypeLockup(lockup: JsonRecord, config: SieveConfig): void {
   }
 }
 
+// Recurse into children; drop wrappers that emptied out. True when the node itself should be pruned.
+function pruneChildren(node: JsonRecord, visit: (child: unknown) => boolean): boolean {
+  let lostPrimaryContent = false;
+  for (const key of Object.keys(node)) {
+    const childBecameEmpty = visit(node[key]);
+    if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
+      delete node[key];
+      if (
+        key === "content" ||
+        key === "contents" ||
+        key === "richShelfRenderer" ||
+        key === "richItemRenderer" ||
+        key === "shelfRenderer"
+      ) {
+        lostPrimaryContent = true;
+      }
+    }
+  }
+  return lostPrimaryContent || Object.keys(node).length === 0;
+}
+
 export async function filterYouTubeJson(
   data: unknown,
   urlPath: string,
@@ -357,24 +378,7 @@ export async function filterYouTubeJson(
       }
     }
 
-    let lostPrimaryContent = false;
-    for (const key of Object.keys(node)) {
-      const childBecameEmpty = collectAndStripNoise(node[key]);
-      if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
-        delete node[key];
-        if (
-          key === "content" ||
-          key === "contents" ||
-          key === "richShelfRenderer" ||
-          key === "richItemRenderer" ||
-          key === "shelfRenderer"
-        ) {
-          lostPrimaryContent = true;
-        }
-      }
-    }
-
-    return lostPrimaryContent || Object.keys(node).length === 0;
+    return pruneChildren(node, collectAndStripNoise);
   }
 
   collectAndStripNoise(data);
@@ -416,80 +420,9 @@ export async function filterYouTubeJson(
       dehypeVideoRenderer(renderer, config);
     }
 
-    let lostPrimaryContent = false;
-    for (const key of Object.keys(node)) {
-      const childBecameEmpty = applyVerdictsAndDehype(node[key]);
-      if (childBecameEmpty && PRUNABLE_WRAPPERS.has(key)) {
-        delete node[key];
-        if (
-          key === "content" ||
-          key === "contents" ||
-          key === "richShelfRenderer" ||
-          key === "richItemRenderer" ||
-          key === "shelfRenderer"
-        ) {
-          lostPrimaryContent = true;
-        }
-      }
-    }
-
-    return lostPrimaryContent || Object.keys(node).length === 0;
+    return pruneChildren(node, applyVerdictsAndDehype);
   }
 
   applyVerdictsAndDehype(data);
   return data;
-}
-
-function findBalancedJsonEnd(source: string, openBraceIndex: number): number {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = openBraceIndex; i < source.length; i++) {
-    const ch = source[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-export async function rewriteYouTubeHtmlInitialData(
-  html: string,
-  pageUrl: string,
-  config: SieveConfig,
-  decide: BatchDecider,
-  sink?: DropSink,
-): Promise<string> {
-  if (!config.enabled || !config.youtube.enabled) return html;
-  const markerMatch = /(?:var\s+ytInitialData|window\["ytInitialData"\])\s*=\s*\{/.exec(html);
-  if (!markerMatch) return html;
-
-  const openBrace = markerMatch.index + markerMatch[0].length - 1;
-  const closeBrace = findBalancedJsonEnd(html, openBrace);
-  if (closeBrace === -1) return html;
-
-  try {
-    const parsed: unknown = JSON.parse(html.slice(openBrace, closeBrace + 1));
-    const filtered = await filterYouTubeJson(parsed, "/youtubei/v1/browse", pageUrl, config, decide, sink);
-    const safeSerialized = JSON.stringify(filtered).replace(/<\//g, "<\\/");
-    return html.slice(0, openBrace) + safeSerialized + html.slice(closeBrace + 1);
-  } catch {
-    return html;
-  }
 }

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/defaults.js";
 import type { FeedItem, MemoryLookup, SeedSets, SieveConfig } from "../src/types.js";
-import { evaluateLocalTiers, extractYouTubeIdsFromText } from "../src/core/sieve.js";
+import { evaluateLocalDecision, extractYouTubeIdsFromText } from "../src/core/sieve.js";
+
+const evaluateLocalTiers = (...args: Parameters<typeof evaluateLocalDecision>) =>
+  evaluateLocalDecision(...args).verdict;
 
 function makeSeeds(overrides: Partial<SeedSets> = {}): SeedSets {
   return {
@@ -194,6 +197,19 @@ describe("evaluateLocalTiers", () => {
     expect(evaluateLocalTiers(sirenBait, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
     expect(evaluateLocalTiers(illegalTools, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
     expect(evaluateLocalTiers(shortDrama, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
+  });
+});
+
+describe("x slop cadence filter off", () => {
+  it("does not drop an X post for slop cadence at the generic threshold", () => {
+    // Scores 71: above the X threshold (65), below the generic one (74).
+    const text = "It's not about working harder, it's about leveraging systems.\n🚀 Unlock the power of distribution\nSave this for later. Let that sink in.";
+    const item: FeedItem = { platform: "x", id: "xs1", creatorHandle: "grifter", surface: "timeline", titleOrText: text };
+    const on = { ...DEFAULT_CONFIG, x: { ...DEFAULT_CONFIG.x, slopCadenceFilter: true } };
+    const off = { ...DEFAULT_CONFIG, x: { ...DEFAULT_CONFIG.x, slopCadenceFilter: false } };
+    expect(evaluateLocalDecision(item, off, makeSeeds(), emptyMemory).reason).not.toBe("slop cadence");
+    // sanity: the same text is flagged with the filter on, so the test can fail
+    expect(evaluateLocalDecision(item, on, makeSeeds(), emptyMemory).reason).toBe("slop cadence");
   });
 });
 

@@ -104,7 +104,7 @@ export function evaluateLocalDecision(
   if (!item.isFollowed) {
     if (item.platform === "x" && config.x.slopCadenceFilter) {
       if (isStructuralSlop(item.titleOrText, {}, 65)) return DROP("slop cadence");
-    } else if (item.platform !== "youtube") {
+    } else if (item.platform !== "youtube" && item.platform !== "x") {
       if (isStructuralSlop(item.titleOrText, {}, 74)) return DROP("slop cadence");
     }
 
@@ -136,16 +136,6 @@ export function evaluateLocalDecision(
   }
 
   return { verdict: "uncertain", reason: "uncertain" };
-}
-
-export function evaluateLocalTiers(
-  item: FeedItem,
-  config: SieveConfig,
-  seeds: SeedSets,
-  memory: MemoryLookup,
-  novelty?: NoveltyLookup,
-): Verdict {
-  return evaluateLocalDecision(item, config, seeds, memory, novelty).verdict;
 }
 
 export interface SieveHooks {
@@ -194,14 +184,15 @@ export async function runSieveDetailed(
   const holdMs = Math.max(50, config.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
   const gradingPromise = gradeItemsDetailed(uncertain, config, fetchImpl)
     .then(async (verdicts) => {
-      for (const item of uncertain) {
-        // Cache only what the model explicitly judged: "u", malformed and missing replies stay uncached.
-        const g = verdicts.get(item.id);
-        if (g?.verdict === "k") await memory.recordVerdict(item, "keep");
-        else if (g?.verdict === "d") {
-          await memory.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
-        }
-      }
+      // Cache only what the model explicitly judged: "u", malformed and missing replies stay uncached.
+      await Promise.all(
+        uncertain.map((item) => {
+          const g = verdicts.get(item.id);
+          if (g?.verdict === "k") return memory.recordVerdict(item, "keep");
+          if (g?.verdict === "d") return memory.recordVerdict(item, "drop", g.why ? `grader: ${g.why}` : "grader");
+          return undefined;
+        }),
+      );
       return verdicts;
     })
     .catch((err: unknown) => {
@@ -232,15 +223,4 @@ export async function runSieveDetailed(
   }
 
   return dropped;
-}
-
-export async function runSieveOnBatch(
-  items: FeedItem[],
-  config: SieveConfig,
-  seeds: SeedSets,
-  memory: MemoryStore,
-  fetchImpl: typeof fetch = fetch,
-  novelty?: NoveltyLookup,
-): Promise<Set<string>> {
-  return new Set((await runSieveDetailed(items, config, seeds, memory, fetchImpl, novelty)).keys());
 }

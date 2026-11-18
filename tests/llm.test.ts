@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/defaults.js";
 import type { FeedItem, MemoryStore, ResolvedVerdict, SeedSets, SieveConfig } from "../src/types.js";
-import { gradeItemsBatch, parseIndexedVerdicts } from "../src/core/llm.js";
-import { runSieveOnBatch } from "../src/core/sieve.js";
+import { gradeItemsBatch, gradeItemsDetailed, parseVerdictMap } from "../src/core/llm.js";
+import { runSieveDetailed } from "../src/core/sieve.js";
+
+const parseIndexedVerdicts = (raw: string, ids: string[]) =>
+  new Set([...parseVerdictMap(raw, ids)].filter(([, v]) => v.verdict === "d").map(([id]) => id));
+const runSieveOnBatch = async (...args: Parameters<typeof runSieveDetailed>) =>
+  new Set((await runSieveDetailed(...args)).keys());
 
 describe("parseIndexedVerdicts", () => {
   it("parses plain JSON and markdown-fenced drop arrays", () => {
@@ -51,7 +56,7 @@ describe("gradeItemsBatch and runSieveOnBatch", () => {
         recorded.push([item.id, v]);
       },
       clear: async () => {},
-      counts: () => ({ cachedItems: 0, learnedCreators: 0, droppedTotal: 0 }),
+      counts: () => ({ cachedItems: 0, learnedCreators: 0 }),
     };
     const seeds: SeedSets = {
       hnVideos: new Set(),
@@ -83,7 +88,7 @@ describe("gradeItemsBatch and runSieveOnBatch", () => {
         recorded.push([item.id, v]);
       },
       clear: async () => {},
-      counts: () => ({ cachedItems: 0, learnedCreators: 0, droppedTotal: 0 }),
+      counts: () => ({ cachedItems: 0, learnedCreators: 0 }),
     };
     const seeds: SeedSets = {
       hnVideos: new Set(),
@@ -132,7 +137,7 @@ describe("gradeItemsBatch and runSieveOnBatch", () => {
         recorded.push([item.id, v]);
       },
       clear: async () => {},
-      counts: () => ({ cachedItems: 0, learnedCreators: 0, droppedTotal: 0 }),
+      counts: () => ({ cachedItems: 0, learnedCreators: 0 }),
     };
     const seeds: SeedSets = {
       hnVideos: new Set(),
@@ -159,5 +164,22 @@ describe("gradeItemsBatch and runSieveOnBatch", () => {
       throw new Error("should not be called");
     });
     expect(res.size).toBe(0);
+  });
+
+  it("never overlaps grader fetches across concurrent callers", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const slowFetch: typeof fetch = async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 20));
+      active -= 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"drop":[]}' } }] }), { status: 200 });
+    };
+    await Promise.all([
+      gradeItemsDetailed(sampleItems, DEFAULT_CONFIG, slowFetch),
+      gradeItemsDetailed(sampleItems, DEFAULT_CONFIG, slowFetch),
+    ]);
+    expect(maxActive).toBe(1);
   });
 });

@@ -71,7 +71,6 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
   const maxItems = options.maxItems ?? 50_000;
   const items = new Map<string, StoredVerdict>();
   const creators = new Map<string, CreatorRecord>();
-  let droppedTotal = 0;
 
   const dbPromise = openDb();
   const ready: Promise<void> = dbPromise.then((db) => {
@@ -79,23 +78,29 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
     const now = Date.now();
     return new Promise<void>((done) => {
     try {
-      const tx = db.transaction(["items", "creators"], "readonly");
-      const itemReq = tx.objectStore("items").getAll();
+      // Readwrite so expired rows are deleted instead of re-read on every wake.
+      const tx = db.transaction(["items", "creators"], "readwrite");
+      const itemStore = tx.objectStore("items");
+      const itemReq = itemStore.getAll();
       itemReq.onsuccess = () => {
         if (!Array.isArray(itemReq.result)) return;
+        const live: StoredVerdict[] = [];
         for (const row of itemReq.result) {
-          if (isStoredVerdict(row) && !expired(row, now) && items.size < maxItems) {
-            items.set(row.key, row);
-          }
+          if (!isStoredVerdict(row)) continue;
+          if (expired(row, now)) itemStore.delete(row.key);
+          else live.push(row);
         }
+        // Over the cap, keep the newest rows (oldest first = LRU order in the Map).
+        for (const row of live.sort((a, b) => a.at - b.at).slice(-maxItems)) items.set(row.key, row);
       };
-      const creatorReq = tx.objectStore("creators").getAll();
+      const creatorStore = tx.objectStore("creators");
+      const creatorReq = creatorStore.getAll();
       creatorReq.onsuccess = () => {
         if (!Array.isArray(creatorReq.result)) return;
         for (const row of creatorReq.result) {
-          if (isCreatorRecord(row) && now - row.updatedAt <= CREATOR_TTL_MS) {
-            creators.set(row.key, row);
-          }
+          if (!isCreatorRecord(row)) continue;
+          if (now - row.updatedAt <= CREATOR_TTL_MS) creators.set(row.key, row);
+          else creatorStore.delete(row.key);
         }
       };
       tx.oncomplete = () => done();
@@ -154,9 +159,10 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
     },
 
     async recordVerdict(item: FeedItem, verdict: ResolvedVerdict, reason?: string) {
-      if (verdict === "drop") droppedTotal += 1;
       const now = Date.now();
       const iKey = itemMapKey(item.platform, item.id);
+      // A grader verdict never overrides the user's own call on the same item.
+      if (!reason?.startsWith("you: ") && items.get(iKey)?.reason?.startsWith("you: ")) return;
       const entry: StoredVerdict = { key: iKey, verdict, at: now, ...(reason ? { reason } : {}) };
 
       // A repeat of the user's same call on the same post must not count toward the creator again.
@@ -206,16 +212,27 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       }
     },
 
-    async clear() {
-      items.clear();
+    async clear(options = {}) {
+      // keepUser: the user's own item calls stay; creator counts mix grader verdicts, so they always reset.
+      for (const [k, v] of items) if (!options.keepUser || !v.reason?.startsWith("you: ")) items.delete(k);
       creators.clear();
-      droppedTotal = 0;
       const db = await dbPromise;
       if (!db) return;
       try {
         const tx = db.transaction(["items", "creators"], "readwrite");
-        tx.objectStore("items").clear();
-        tx.objectStore("creators").clear();
+        if (options.keepUser) {
+          const cursorReq = tx.objectStore("items").openCursor();
+          cursorReq.onsuccess = () => {
+            const cur = cursorReq.result;
+            if (!cur) return;
+            if (!(cur.value as StoredVerdict).reason?.startsWith("you: ")) cur.delete();
+            cur.continue();
+          };
+          tx.objectStore("creators").clear();
+        } else {
+          tx.objectStore("items").clear();
+          tx.objectStore("creators").clear();
+        }
       } catch {
         // Private browsing may reject write transactions.
       }
@@ -229,7 +246,6 @@ export function createMemoryStore(options: MemoryOptions = {}): MemoryStore {
       return {
         cachedItems: items.size,
         learnedCreators,
-        droppedTotal,
       };
     },
   };

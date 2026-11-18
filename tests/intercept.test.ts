@@ -8,6 +8,10 @@ describe("intercept url list", () => {
     expect(matchesInterceptUrl("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false")).toBe(true);
     expect(matchesInterceptUrl("https://x.com/i/api/graphql/abc/HomeTimeline")).toBe(true);
     expect(matchesInterceptUrl("https://www.instagram.com/graphql/query")).toBe(true);
+    expect(matchesInterceptUrl("https://x.com/i/api/graphql/abc/SearchTimeline?variables=1")).toBe(true);
+    expect(matchesInterceptUrl("https://x.com/i/api/graphql/abc/Likes")).toBe(false);
+    expect(matchesInterceptUrl("https://twitter.com/i/api/graphql/abc/CreateTweet")).toBe(false);
+    expect(matchesInterceptUrl("https://www.tiktok.com/api/recommend/item_list/")).toBe(false);
     expect(matchesInterceptUrl("https://www.youtube.com/")).toBe(false);
     expect(matchesInterceptUrl("https://www.youtube.com/youtubei/v1/player")).toBe(false);
     expect(matchesInterceptUrl("https://evil.example/https://x.com/i/api/graphql/a")).toBe(false);

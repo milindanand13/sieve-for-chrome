@@ -386,6 +386,14 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
   // src/shared/intercept.ts
   var INTERCEPT_TAG = "sieve-intercept-v1";
   var MAX_STREAM_BYTES = 12 * 1024 * 1024;
+  var X_TIMELINE_OPS = [
+    "HomeTimeline",
+    "HomeLatestTimeline",
+    "ExplorePage",
+    "GenericTimelineById",
+    "ExploreSidebar",
+    "SearchTimeline"
+  ];
   var INTERCEPT_URLS = [
     "https://www.youtube.com/youtubei/v1/browse*",
     "https://www.youtube.com/youtubei/v1/next*",
@@ -393,15 +401,14 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     "https://m.youtube.com/youtubei/v1/browse*",
     "https://m.youtube.com/youtubei/v1/next*",
     "https://m.youtube.com/youtubei/v1/search*",
-    "https://x.com/i/api/graphql/*",
-    "https://twitter.com/i/api/graphql/*",
+    ...["x.com", "twitter.com"].flatMap(
+      (h) => X_TIMELINE_OPS.map((op) => `https://${h}/i/api/graphql/*/${op}*`)
+    ),
     "https://www.instagram.com/graphql/query*",
     "https://www.instagram.com/api/v1/clips/home/*",
     "https://www.instagram.com/api/v1/feed/timeline/*",
     "https://i.instagram.com/api/v1/clips/home/*",
-    "https://i.instagram.com/api/v1/feed/timeline/*",
-    "https://www.tiktok.com/api/recommend/item_list/*",
-    "https://www.tiktok.com/api/post/item_list/*"
+    "https://i.instagram.com/api/v1/feed/timeline/*"
   ];
   var INTERCEPT_RES = INTERCEPT_URLS.map(
     (glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`)
@@ -451,10 +458,14 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       }
       const id = d.id;
       const reply = (body) => window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
-      chrome.runtime.sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body }).then((res) => {
-        if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed);
-        reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
-      }).catch(() => reply(null));
+      try {
+        chrome.runtime.sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body }).then((res) => {
+          if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed);
+          reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
+        }).catch(() => reply(null));
+      } catch {
+        reply(null);
+      }
     });
   }
   var dimReasons = /* @__PURE__ */ new Map();
@@ -508,7 +519,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (document.documentElement) observe();
     else document.addEventListener("DOMContentLoaded", observe, { once: true });
   }
-  function bootSiteAdapter(onConfig) {
+  function bootSiteAdapter(onConfig, isOn) {
     installInterceptRelay();
     chrome.runtime.onMessage.addListener((msg, sender) => {
       if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "LATE_DIMS") return;
@@ -560,6 +571,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     onConfig = (cfg) => {
       if (document.documentElement) {
         document.documentElement.dataset.sieveHide = cfg.display.hideDropped ? "1" : "0";
+        document.documentElement.dataset.sieveActive = isOn(cfg) ? "1" : "0";
       }
       baseOnConfig(cfg);
     };
@@ -703,7 +715,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (!activeConfig?.enabled || !activeConfig.x.enabled || !activeConfig.x.caliberFilter) return;
     if (!window.location.pathname.startsWith("/explore")) return;
     const cells = document.querySelectorAll(
-      'div[data-testid="primaryColumn"] [data-testid="cellInnerDiv"]:not([data-sieve-x-dropped])'
+      'div[data-testid="primaryColumn"] [data-testid="cellInnerDiv"]'
     );
     const batch = [];
     const cellById = /* @__PURE__ */ new Map();
@@ -788,7 +800,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     });
     syncBirdBranding();
     schedulePolish();
-  });
+  }, (cfg) => cfg.enabled && cfg.x.enabled);
   var titleObserver = new MutationObserver(syncBirdBranding);
   var watchHead = () => {
     if (document.head) {

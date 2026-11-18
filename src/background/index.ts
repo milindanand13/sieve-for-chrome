@@ -7,6 +7,7 @@ import {
   type EvaluateSsrItemsResponse,
   type DimEntry,
   type FeedItem,
+  type Platform,
   type GraderSettings,
   type ResolveDearrowTitlesResponse,
   type SeedSets,
@@ -103,6 +104,7 @@ const FEEDBACK_KEY = "sieveFeedback";
 const FEEDBACK_CAP = 500; // all kept; pickExamples sends the grader the 30 most relevant
 const RECENT_CAP = 3000;
 const recentItems = new Map<string, FeedItem>();
+const PLATFORMS = ["youtube", "x", "instagram", "tiktok"];
 const FEEDBACK_ACTIONS = ["keep", "drop", "keepCreator", "dropCreator"];
 
 function parseFeedback(raw: unknown): FeedbackEntry[] {
@@ -235,7 +237,7 @@ async function evaluate(
         .catch(() => undefined);
     },
   });
-  await stats.record(docKey, items, dropped).catch(() => undefined);
+  void stats.record(docKey, items, dropped).catch(() => undefined);
   if (dropped.size > 0) await setSessionCount((await getSessionCount()) + dropped.size);
   return dropped;
 }
@@ -279,7 +281,16 @@ function handle(
 
   if (raw.type === "REWRITE_RESPONSE") {
     // Only content scripts in a tab may ask, and only for URLs the interceptor wraps.
+    // A page script can fake this message through the relay, so the URL must belong to the sender's own site.
+    let sameSite = false;
+    try {
+      const site = siteForHost(new URL(String(raw.url)).hostname);
+      sameSite = !!site && site === siteForHost(new URL(sender.url ?? sender.tab?.url ?? "").hostname);
+    } catch {
+      // Bad URL: rejected below.
+    }
     if (
+      !sameSite ||
       !sender.tab ||
       typeof raw.url !== "string" ||
       typeof raw.pageUrl !== "string" ||
@@ -290,12 +301,12 @@ function handle(
       return Promise.resolve({ body: null });
     }
     const docKey = docKeyOf(sender);
-    return rewriteResponseBody(raw.url, raw.pageUrl, raw.body, config, {
+    return rewriteResponseBody(raw.url, sender.url ?? raw.pageUrl, raw.body, config, {
       evaluate: (items) => evaluate(items, docKey, targetOf(sender)),
       recordFixture: addFixture,
     }).then(async (res) => {
       if (!res) return { body: null };
-      await stats.recordRemoved(res.hard).catch(() => undefined);
+      void stats.recordRemoved(res.hard).catch(() => undefined);
       return { body: res.body, dimmed: res.dimmed };
     });
   }
@@ -338,12 +349,12 @@ function handle(
   }
 
   if (raw.type === "CLEAR_VERDICT_CACHE") {
-    return memory.clear().then(() => ({ ok: true }));
+    return memory.clear({ keepUser: true }).then(() => ({ ok: true }));
   }
 
   if (raw.type === "RECORD_DWELL" && typeof raw.text === "string") {
     if (config.enabled && config.noveltyFilter) {
-      novelty.recordDwelled(raw.text);
+      novelty.recordDwelled(raw.text.slice(0, 2000));
     }
     return Promise.resolve({ ok: true });
   }
@@ -361,10 +372,15 @@ function handle(
   }
 
   if (raw.type === "EVALUATE_SSR_ITEMS" && Array.isArray(raw.items)) {
-    const items = raw.items.filter(
-      (item): item is FeedItem =>
-        isRecord(item) && typeof item.id === "string" && typeof item.titleOrText === "string",
-    );
+    const items = raw.items
+      .slice(0, 500)
+      .filter(
+        (item): item is FeedItem =>
+          isRecord(item) &&
+          typeof item.id === "string" &&
+          typeof item.titleOrText === "string" &&
+          PLATFORMS.includes(item.platform as Platform),
+      );
     return evaluate(items, docKeyOf(sender), targetOf(sender)).then(
       (dropped): EvaluateSsrItemsResponse => ({
         dropped: [...dropped.keys()],

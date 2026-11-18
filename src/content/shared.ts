@@ -52,13 +52,18 @@ export function installInterceptRelay(): void {
     const id = d.id;
     const reply = (body: string | null): void =>
       window.postMessage({ tag: INTERCEPT_TAG, dir: "res", id, body }, location.origin);
-    chrome.runtime
-      .sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body })
-      .then((res: unknown) => {
-        if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed as DimEntry[]);
-        reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
-      })
-      .catch(() => reply(null));
+    try {
+      chrome.runtime
+        .sendMessage({ type: "REWRITE_RESPONSE", url: d.url, pageUrl: d.pageUrl, body: d.body })
+        .then((res: unknown) => {
+          if (isRecord(res) && Array.isArray(res.dimmed)) registerDimmed(res.dimmed as DimEntry[]);
+          reply(isRecord(res) && typeof res.body === "string" ? res.body : null);
+        })
+        .catch(() => reply(null));
+    } catch {
+      // Orphaned after an extension reload: sendMessage throws synchronously; don't make the page wait out its timeout.
+      reply(null);
+    }
   });
 }
 
@@ -135,7 +140,10 @@ export function installDimMarker(site: DimSite): void {
   else document.addEventListener("DOMContentLoaded", observe, { once: true });
 }
 
-export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
+export function bootSiteAdapter(
+  onConfig: (config: SieveConfig) => void,
+  isOn: (config: SieveConfig) => boolean,
+): void {
   installInterceptRelay();
   // Grader verdicts that finished after the response was already delivered.
   chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
@@ -195,6 +203,8 @@ export function bootSiteAdapter(onConfig: (config: SieveConfig) => void): void {
   onConfig = (cfg) => {
     if (document.documentElement) {
       document.documentElement.dataset.sieveHide = cfg.display.hideDropped ? "1" : "0";
+      // dim.css is gated on this, so turning Sieve or the site off clears dimming without a reload.
+      document.documentElement.dataset.sieveActive = isOn(cfg) ? "1" : "0";
     }
     baseOnConfig(cfg);
   };

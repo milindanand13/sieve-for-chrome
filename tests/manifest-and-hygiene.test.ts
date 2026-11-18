@@ -120,7 +120,7 @@ describe("manifest, seeds, UI polish, and copy hygiene", () => {
     expect(css).toContain("align-items: center");
   });
 
-  it("covers YouTube, Twitter, Instagram, and TikTok zero-bloat UI rules", () => {
+  it("covers YouTube, Twitter, Instagram zero-bloat UI rules", () => {
     const ytCss = readFileSync(path.join(root, "extension/styles/youtube.css"), "utf8");
     const ytContent = readFileSync(path.join(root, "src/content/youtube.ts"), "utf8");
     expect(ytCss).toContain("voice-search-button");
@@ -154,16 +154,12 @@ describe("manifest, seeds, UI polish, and copy hygiene", () => {
     expect(igCss).toContain("/explore/people");
     expect(igCss).toContain("data-sieve-ig-right-rail");
 
-    const ttCss = readFileSync(path.join(root, "extension/styles/tiktok.css"), "utf8");
-    expect(ttCss).toContain("recharge-entrance");
-    expect(ttCss).toContain("download-entrance");
-    expect(ttCss).toContain("shortdrama");
     expect(detectPlatformFromUrl("https://example.org")).toBeNull();
     expect(detectPlatformFromUrl("chrome://extensions")).toBeNull();
     expect(detectPlatformFromUrl("https://www.youtube.com/watch?v=IS5ycm7VfXg")).toBe("youtube");
     expect(detectPlatformFromUrl("https://x.com/explore")).toBe("x");
     expect(detectPlatformFromUrl("https://www.instagram.com/reels/")).toBe("instagram");
-    expect(detectPlatformFromUrl("https://www.tiktok.com/")).toBe("tiktok");
+    expect(detectPlatformFromUrl("https://www.tiktok.com/")).toBeNull();
   });
 
   it("contains zero em dashes across project source, UI, and documentation files", () => {

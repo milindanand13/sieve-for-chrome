@@ -76,6 +76,7 @@ class SieveXHR extends OrigXHR {
   #url = "";
   #released = false;
   #started = false;
+  #gen = 0;
 
   constructor() {
     super();
@@ -86,6 +87,10 @@ class SieveXHR extends OrigXHR {
     this.#url = absolute(String(url));
     this.#released = false;
     this.#started = false;
+    this.#gen++;
+    // A reused XHR must not serve the previous request's rewritten body.
+    Reflect.deleteProperty(this, "responseText");
+    Reflect.deleteProperty(this, "response");
     // @ts-expect-error spread of optional tuple matches the overloaded signature
     super.open(method, url, ...rest);
   }
@@ -104,11 +109,14 @@ class SieveXHR extends OrigXHR {
   }
 
   async #process(): Promise<void> {
+    const gen = this.#gen;
     try {
       const text =
         this.responseType === "json" ? JSON.stringify(this.response) : this.responseText;
       if (text.length <= MAX_STREAM_BYTES) {
         const out = await rewrite(this.#url, text);
+        // Aborted or re-opened while the rewrite was pending: replaying would hit the wrong request.
+        if (gen !== this.#gen || this.readyState !== 4) return;
         if (out !== null && out !== text) {
           Object.defineProperty(this, "responseText", { value: out, configurable: true });
           const value: unknown = this.responseType === "json" ? JSON.parse(out) : out;
@@ -118,6 +126,7 @@ class SieveXHR extends OrigXHR {
     } catch {
       // Fall through and replay the untouched response.
     }
+    if (gen !== this.#gen || this.readyState !== 4) return;
     this.#released = true;
     this.dispatchEvent(new Event("readystatechange"));
     this.dispatchEvent(new ProgressEvent("load"));

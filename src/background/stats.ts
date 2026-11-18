@@ -34,6 +34,9 @@ export interface KeyValueStore {
   set(items: Record<string, unknown>): Promise<void>;
 }
 
+// Counting key only: free-text grader labels would otherwise add a new key per label.
+const reasonKey = (r: string): string => (r.startsWith("grader") ? "grader" : r.replace(/ \(cached\)$/, ""));
+
 export const emptyCounts = (): Counts => ({ seen: 0, dimmed: 0, removed: 0, reasons: {} });
 
 export function dayKey(ms: number): string {
@@ -101,7 +104,8 @@ export function createStats(kv: KeyValueStore, now: () => number = Date.now) {
           const reason = dropped.get(item.id);
           if (reason !== undefined) {
             c.dimmed += 1;
-            c.reasons[reason] = (c.reasons[reason] ?? 0) + 1;
+            const rk = reasonKey(reason);
+            c.reasons[rk] = (c.reasons[rk] ?? 0) + 1;
             logAdds.push({ site: item.platform, text: snippet(item.titleOrText), reason, time: t });
           }
         }

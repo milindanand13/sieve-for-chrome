@@ -83,12 +83,6 @@ export function parseVerdictMap(raw: string, orderedIds: string[]): Map<string, 
   return out;
 }
 
-export function parseIndexedVerdicts(raw: string, orderedIds: string[]): Set<string> {
-  const dropped = new Set<string>();
-  for (const [id, v] of parseVerdictMap(raw, orderedIds)) if (v.verdict === "d") dropped.add(id);
-  return dropped;
-}
-
 function summarizeIndexedItem(item: FeedItem, index: number) {
   return {
     i: String(index),
@@ -127,6 +121,14 @@ export async function gradeItemsBatch(
   return dropped;
 }
 
+// One local model: chunks from all callers run one at a time, so the 6s abort times the request, not the queue.
+let chunkQueue: Promise<unknown> = Promise.resolve();
+function queued<T>(fn: () => Promise<T>): Promise<T> {
+  const next = chunkQueue.then(fn, fn);
+  chunkQueue = next.catch(() => undefined);
+  return next;
+}
+
 /** Grades any number of items in sequential chunks of 20. A failure after the first chunk keeps earlier verdicts. */
 export async function gradeItemsDetailed(
   items: FeedItem[],
@@ -136,7 +138,7 @@ export async function gradeItemsDetailed(
   const out = new Map<string, GraderVerdict>();
   for (let i = 0; i < items.length; i += MAX_BATCH_SIZE) {
     try {
-      for (const [id, v] of await gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config, fetchImpl)) {
+      for (const [id, v] of await queued(() => gradeChunk(items.slice(i, i + MAX_BATCH_SIZE), config, fetchImpl))) {
         out.set(id, v);
       }
     } catch (err) {

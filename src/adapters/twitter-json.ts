@@ -141,9 +141,15 @@ function buildTweetRichContext(tweet: JsonRecord): string | undefined {
   return parts.length > 0 ? parts.join(" | ") : undefined;
 }
 
+// X entity indices and display_text_range are offsets into the text, so only same-length edits are safe.
+function calmSameLength(text: string): string {
+  const calmed = calmTitle(text);
+  return calmed.length === text.length ? calmed : text;
+}
+
 function polishTweetPresentation(tweet: JsonRecord, config: SieveConfig, ytIds: string[]): void {
   if (isRecord(tweet.legacy) && typeof tweet.legacy.full_text === "string") {
-    tweet.legacy.full_text = calmTitle(tweet.legacy.full_text);
+    tweet.legacy.full_text = calmSameLength(tweet.legacy.full_text);
   }
   if (
     isRecord(tweet.note_tweet) &&
@@ -151,7 +157,7 @@ function polishTweetPresentation(tweet: JsonRecord, config: SieveConfig, ytIds: 
     isRecord(tweet.note_tweet.note_tweet_results.result) &&
     typeof tweet.note_tweet.note_tweet_results.result.text === "string"
   ) {
-    tweet.note_tweet.note_tweet_results.result.text = calmTitle(
+    tweet.note_tweet.note_tweet_results.result.text = calmSameLength(
       tweet.note_tweet.note_tweet_results.result.text,
     );
   }

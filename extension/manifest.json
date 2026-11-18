@@ -11,8 +11,6 @@
     "storage",
     "unlimitedStorage",
     "declarativeNetRequest",
-    "tabs",
-    "activeTab",
     "contextMenus"
   ],
   "host_permissions": [

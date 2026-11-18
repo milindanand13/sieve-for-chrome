@@ -44,7 +44,7 @@ async function evaluateExploreCells(): Promise<void> {
   if (!window.location.pathname.startsWith("/explore")) return;
 
   const cells = document.querySelectorAll<HTMLElement>(
-    'div[data-testid="primaryColumn"] [data-testid="cellInnerDiv"]:not([data-sieve-x-dropped])',
+    'div[data-testid="primaryColumn"] [data-testid="cellInnerDiv"]',
   );
   const batch: FeedItem[] = [];
   const cellById = new Map<string, HTMLElement>();
@@ -149,7 +149,7 @@ bootSiteAdapter((cfg) => {
   });
   syncBirdBranding();
   schedulePolish();
-});
+}, (cfg) => cfg.enabled && cfg.x.enabled);
 
 const titleObserver = new MutationObserver(syncBirdBranding);
 const watchHead = () => {

@@ -1,18 +1,16 @@
 import { filterInstagramJson } from "../adapters/instagram-json.js";
-import { filterTikTokJson } from "../adapters/tiktok-json.js";
 import { filterTwitterJson } from "../adapters/twitter-json.js";
 import { filterYouTubeJson } from "../adapters/youtube-json.js";
 import { createSink } from "../core/sink.js";
+import { X_TIMELINE_OPS } from "../shared/intercept.js";
 import type { FeedItem, Platform, RewriteResult, SieveConfig } from "../types.js";
 
-const TWITTER_TIMELINE_RE =
-  /\/i\/api\/graphql\/[^/]+\/(HomeTimeline|HomeLatestTimeline|ExplorePage|GenericTimelineById|ExploreSidebar|SearchTimeline)/;
+const TWITTER_TIMELINE_RE = new RegExp(`/i/api/graphql/[^/]+/(${X_TIMELINE_OPS.join("|")})`);
 
 export function siteForHost(host: string): Platform | null {
   if (host.endsWith("youtube.com")) return "youtube";
   if (host === "x.com" || host === "twitter.com") return "x";
   if (host.endsWith("instagram.com")) return "instagram";
-  if (host.endsWith("tiktok.com")) return "tiktok";
   return null;
 }
 
@@ -30,11 +28,6 @@ export function shouldFilterUrl(url: URL, config: SieveConfig): boolean {
         (path === "/graphql/query" ||
           path.startsWith("/api/v1/clips/home") ||
           path.startsWith("/api/v1/feed/timeline"))
-      );
-    case "tiktok":
-      return (
-        config.tiktok.enabled &&
-        (path.startsWith("/api/recommend/item_list") || path.startsWith("/api/post/item_list"))
       );
     default:
       return false;
@@ -82,8 +75,6 @@ export async function rewriteResponseBody(
       out = await filterTwitterJson(json, path, config, decide, sink);
     } else if (site === "instagram") {
       out = await filterInstagramJson(json, path, config, decide, pageUrl, sink);
-    } else if (site === "tiktok") {
-      out = await filterTikTokJson(json, config, decide, path, pageUrl);
     }
     return { body: JSON.stringify(out), dimmed: sink.dimmed, hard: sink.hard };
   } catch {

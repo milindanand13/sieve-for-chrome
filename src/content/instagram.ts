@@ -206,7 +206,7 @@ bootSiteAdapter((cfg) => {
     sieveIgClutter: igOn && cfg.instagram.hideClutter ? "1" : "0",
   });
   scheduleSweep();
-});
+}, (cfg) => cfg.enabled && cfg.instagram.enabled);
 
 window.addEventListener("popstate", scheduleSweep);
 

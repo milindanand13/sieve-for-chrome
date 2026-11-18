@@ -44,7 +44,6 @@ describe("createMemoryStore", () => {
     await store.recordVerdict(makeItem("m2", "@MixedBag"), "drop");
     await store.recordVerdict(makeItem("m3", "@MixedBag"), "keep");
     expect(store.getCreatorVerdict("youtube", "mixedbag")).toBeUndefined();
-    expect(store.counts().droppedTotal).toBe(6);
   });
 
   it("evicts oldest item verdicts past maxItems and clears cleanly", async () => {
@@ -85,5 +84,25 @@ describe("createMemoryStore", () => {
     const store = createMemoryStore();
     for (let i = 0; i < 3; i++) await store.recordVerdict(makeItem("d1", "@Spam"), "drop", "you: slop");
     expect(store.getCreatorVerdict("youtube", "spam")).toBeUndefined();
+  });
+
+  it("never lets a grader verdict replace the user's own call", async () => {
+    const store = createMemoryStore();
+    await store.recordVerdict(makeItem("u1", "@c"), "keep", "you: keep");
+    await store.recordVerdict(makeItem("u1", "@c"), "drop", "grader: bait");
+    expect(store.getItemVerdict("youtube", "u1")).toBe("keep");
+    expect(store.getItemReason?.("youtube", "u1")).toBe("you: keep");
+  });
+
+  it("clear({ keepUser }) keeps the user's item verdicts, drops grader ones and creator counts", async () => {
+    const store = createMemoryStore();
+    await store.recordVerdict(makeItem("u1", "@c"), "keep", "you: keep");
+    await store.recordVerdict(makeItem("g1", "@c"), "drop", "grader: bait");
+    await store.clear({ keepUser: true });
+    expect(store.getItemVerdict("youtube", "u1")).toBe("keep");
+    expect(store.getItemVerdict("youtube", "g1")).toBeUndefined();
+    expect(store.counts().cachedItems).toBe(1);
+    await store.clear();
+    expect(store.counts().cachedItems).toBe(0);
   });
 });
