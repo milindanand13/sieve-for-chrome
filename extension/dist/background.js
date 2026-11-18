@@ -2737,7 +2737,16 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
   });
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (tab?.id === void 0 || typeof info.menuItemId !== "string") return;
-    chrome.tabs.sendMessage(tab.id, { type: "FEEDBACK", action: info.menuItemId }, { frameId: info.frameId ?? 0 }).catch(() => void 0);
+    const tabId = tab.id;
+    const action = info.menuItemId;
+    const report = (res) => {
+      const ok = isRecord(res) && res.ok === true;
+      const error = ok ? "" : isRecord(res) && typeof res.error === "string" ? res.error : "refresh this page and try again";
+      void chrome.action.setBadgeText({ tabId, text: ok ? "\u2713" : "!" });
+      void chrome.action.setTitle({ tabId, title: ok ? `Sieve: saved (${action})` : `Sieve: not saved, ${error}` });
+      void chrome.storage.local.set({ sieveLastFeedback: { at: Date.now(), action, ok, error } });
+    };
+    chrome.tabs.sendMessage(tabId, { type: "FEEDBACK", action }, { frameId: info.frameId ?? 0 }).then(report, () => report(void 0));
   });
   async function evaluate(items, docKey, target) {
     items.forEach(rememberRecent);

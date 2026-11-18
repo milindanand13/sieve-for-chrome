@@ -190,9 +190,19 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (tab?.id === undefined || typeof info.menuItemId !== "string") return;
+  const tabId = tab.id;
+  const action = info.menuItemId;
+  // Every click is reported on the toolbar icon, so a lost click is never silent.
+  const report = (res: unknown): void => {
+    const ok = isRecord(res) && res.ok === true;
+    const error = ok ? "" : isRecord(res) && typeof res.error === "string" ? res.error : "refresh this page and try again";
+    void chrome.action.setBadgeText({ tabId, text: ok ? "✓" : "!" });
+    void chrome.action.setTitle({ tabId, title: ok ? `Sieve: saved (${action})` : `Sieve: not saved, ${error}` });
+    void chrome.storage.local.set({ sieveLastFeedback: { at: Date.now(), action, ok, error } });
+  };
   chrome.tabs
-    .sendMessage(tab.id, { type: "FEEDBACK", action: info.menuItemId }, { frameId: info.frameId ?? 0 })
-    .catch(() => undefined);
+    .sendMessage(tabId, { type: "FEEDBACK", action }, { frameId: info.frameId ?? 0 })
+    .then(report, () => report(undefined));
 });
 
 // The one place a rule or grader drop is decided, counted and logged (id -> reason).
