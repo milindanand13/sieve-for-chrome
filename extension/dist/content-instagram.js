@@ -508,15 +508,18 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     });
     let lastContext = null;
     document.addEventListener("contextmenu", (e) => lastContext = e.target, true);
-    chrome.runtime.onMessage.addListener((msg, sender) => {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
       const action = msg.action;
-      if (!dimSite || !(lastContext instanceof Node) || typeof action !== "string") return;
-      const card = [...dimSite.cards()].find((c) => c.contains(lastContext));
-      if (!card) return;
+      const card = dimSite && lastContext instanceof Node && typeof action === "string" ? [...dimSite.cards()].find((c) => c.contains(lastContext)) : void 0;
+      if (!card || !dimSite || typeof action !== "string") {
+        sendResponse({ ok: false, error: "no post under the click" });
+        return;
+      }
       const ids = dimSite.idsOf(card);
       const keep = action === "keep" || action === "keepCreator";
       void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text: (card.innerText || "").slice(0, 300) }).then((res) => {
+        sendResponse(res ?? { ok: false, error: "no reply from Sieve" });
         if (!isRecord(res) || res.ok !== true) return;
         if (keep) {
           ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
@@ -526,7 +529,8 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
           ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
           markCard(card, "you: slop");
         }
-      }).catch(() => void 0);
+      }).catch(() => sendResponse({ ok: false, error: "no reply from Sieve" }));
+      return true;
     });
     const baseOnConfig = onConfig;
     onConfig = (cfg) => {
