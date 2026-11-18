@@ -66,7 +66,7 @@ Or switch **mode** to `api` in **Settings** to use any OpenAI-compatible chat co
   - Slop, dim this
   - Always keep this creator
   - Always dim this creator
-- Your corrections stick and beat every rule. The last 30 are shown to the grader as examples.
+- Your corrections stick and beat every rule. Sieve keeps all of them (up to 500) and shows the grader the 30 most like the posts it is judging, so it gets better the more you correct. Two keeps or three dims on the same creator teach it that creator.
 - **Popup:** shows counts per site and a drop log.
 
 ---

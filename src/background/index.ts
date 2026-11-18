@@ -18,7 +18,7 @@ import { createMemoryStore } from "./memory.js";
 import { createNoveltyMemory } from "./novelty.js";
 import { addFixture } from "./fixtures.js";
 import { snippet } from "../core/sink.js";
-import { feedbackBlock, type FeedbackEntry } from "../core/feedback.js";
+import { feedbackBlock, pickExamples, type FeedbackEntry } from "../core/feedback.js";
 import { normalizeHandle } from "../core/dehype.js";
 import { rewriteResponseBody, siteForHost } from "./rewrite.js";
 import { createStats } from "./stats.js";
@@ -100,7 +100,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // ---- Right-click feedback: corrections persist and are shown to the grader as examples.
 let feedback: FeedbackEntry[] = [];
 const FEEDBACK_KEY = "sieveFeedback";
-const FEEDBACK_CAP = 30;
+const FEEDBACK_CAP = 500; // all kept; pickExamples sends the grader the 30 most relevant
 const RECENT_CAP = 3000;
 const recentItems = new Map<string, FeedItem>();
 const FEEDBACK_ACTIONS = ["keep", "drop", "keepCreator", "dropCreator"];
@@ -203,10 +203,9 @@ async function evaluate(
   target?: { tabId: number; frameId: number },
 ): Promise<Map<string, string>> {
   items.forEach(rememberRecent);
-  const graded: SieveConfig = {
-    ...config,
-    grader: { ...config.grader, rubric: config.grader.rubric + feedbackBlock(feedback) },
-  };
+  const batchText = items.map((i) => `${i.titleOrText} ${i.creatorHandle ?? ""}`).join(" ");
+  const examples = feedbackBlock(pickExamples(feedback, batchText));
+  const graded: SieveConfig = { ...config, grader: { ...config.grader, rubric: config.grader.rubric + examples } };
   const dropped = await runSieveDetailed(items, graded, seeds, memory, fetch, novelty, {
     skipHold: !config.display.hideDropped,
     onGraderError: () => void stats.bumpDiag().catch(() => undefined),
