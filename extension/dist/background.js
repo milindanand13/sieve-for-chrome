@@ -1295,7 +1295,7 @@
   var DEARROW_MIRROR_BASE = "https://dearrow.minibomba.pro/sbserver/api/branding";
   var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
   var FETCH_TIMEOUT_MS = 2500;
-  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
+  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|changed everything|literally|game.?changer|mind.?blow\w*|unbelievable|nobody expected|is (?:dead|over)|finally (?:here|happened)|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
   var titleCache = /* @__PURE__ */ new Map();
   var thumbCache = /* @__PURE__ */ new Map();
   var DEARROW_THUMB_BASE = "https://dearrow-thumb.ajay.app/api/v1/getThumbnail";
@@ -1312,8 +1312,10 @@
     return raw.replace(/(^|\s)>(\S)/g, "$1$2").replace(/\s+/g, " ").trim();
   }
   var MUSIC_TITLE_RE = /\b(?:ft|feat)\.|\b(?:official (?:music )?video|official audio|lyrics?|visuali[sz]er|remix)\b/i;
+  var SHOUTED_WORD_RE = /\b(?:NEW|THIS|HUGE|BEST|WORST|NEVER|EVERYTHING|INSANE|CRAZY|WILD|REAL|TRUTH|BIGGEST|ONLY|FINALLY|STOP|WHY|DON'?T|MUST|SHOCKING)\b/;
   function isVagueClickbaitTitle(title) {
     if (!title || MUSIC_TITLE_RE.test(title)) return false;
+    if (SHOUTED_WORD_RE.test(title)) return true;
     if (VAGUE_TITLE_RE.test(title)) return true;
     const letters = title.replace(/[^A-Za-z]/g, "");
     if (letters.length >= 10) {

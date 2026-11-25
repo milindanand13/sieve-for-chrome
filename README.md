@@ -38,7 +38,7 @@ X and Instagram, graded straight off the page (names and avatars blurred for thi
 - **AI grader that judges your taste.** It runs free on your Mac through Ollama, or on Claude, OpenAI or Gemini with your own API key.
 - **About you.** Describe yourself in Settings, and the grader reads that first.
 - **👍 / 👎 on every card.** Each click is permanent, beats every rule, and teaches the grader. The right-click menu adds "always keep" and "always dim" for a creator.
-- **Plain titles.** Bait YouTube titles are swapped for ones that say what the video covers, from DeArrow's community or written from the creator's own description. Hover a title to see the original.
+- **Plain titles.** Bait YouTube titles, and the titles of every dimmed video, are swapped for ones that say what the video covers, from DeArrow's community or written from the creator's own description. Hover a title to see the original.
 - **Honest thumbnails.** Where DeArrow volunteers picked the frame that best shows the video, Sieve uses it; otherwise it shows a frame from the middle of the video instead of the designed thumbnail. Titles get fewer ALL CAPS and "!!!".
 - **Curated keep lists.** Hacker News favourites, Kagi's small channels, and channels of photographers, filmmakers, animators and artists.
 - **AI-slop list.** About 71,000 channels that post AI-generated junk are dimmed.

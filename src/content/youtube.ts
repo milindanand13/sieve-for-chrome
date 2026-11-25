@@ -89,8 +89,11 @@ async function resolveVagueDomTitles(): Promise<void> {
         TITLE_SEL,
       );
       const raw = titleEl?.textContent?.trim() ?? "";
-      if (!titleEl || !raw || !rememberBounded(dearrowCheckedVideos, vid)) return;
-      if (!isVagueClickbaitTitle(raw)) return;
+      if (!titleEl || !raw) return;
+      // Dimmed videos get a plain title too: you still want to know what is in them.
+      // Not marked checked until it qualifies, so a card dimmed later is picked up then.
+      if (!isVagueClickbaitTitle(raw) && card.dataset.sieveDim !== "1") return;
+      if (!rememberBounded(dearrowCheckedVideos, vid)) return;
 
       const list = titleElsByVid.get(vid) ?? [];
       list.push(titleEl);

@@ -23,6 +23,8 @@ describe("DeArrow k-anonymous title curating", () => {
     expect(isVagueClickbaitTitle("What Happened to L.L. Bean?")).toBe(true);
     expect(isVagueClickbaitTitle("Don't Buy a Camera Until You Watch This!")).toBe(true);
     expect(isVagueClickbaitTitle("The only camera you need…Ever")).toBe(true);
+    expect(isVagueClickbaitTitle("This NEW Claude Update Literally Changed Everything")).toBe(true);
+    expect(isVagueClickbaitTitle("NASA tests the new Artemis heat shield")).toBe(false);
     expect(isVagueClickbaitTitle("Why Nobody Talks About This")).toBe(true);
     expect(
       isVagueClickbaitTitle("Machining a Cycloidal Gearbox on a Manual Lathe"),
