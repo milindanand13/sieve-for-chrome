@@ -4,6 +4,7 @@ import { extractShortDescription, writePlainTitles, type TitleJob } from "../cor
 import { runSieveDetailed } from "../core/sieve.js";
 import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
 import {
+  isGraderMode,
   isRecord,
   type EvaluateSsrItemsResponse,
   type DimEntry,
@@ -303,7 +304,7 @@ function docKeyOf(sender: chrome.runtime.MessageSender): string {
 
 function parseGraderOverride(raw: unknown): GraderSettings | undefined {
   if (!isRecord(raw)) return undefined;
-  const mode = raw.mode === "off" || raw.mode === "local" || raw.mode === "api" ? raw.mode : null;
+  const mode = isGraderMode(raw.mode) ? raw.mode : null;
   if (
     !mode ||
     typeof raw.endpoint !== "string" ||

@@ -34,7 +34,7 @@ const UNIVERSAL_SWITCHES: SwitchSpec[] = [
     label: "tier 2 local / api grader",
     get: (c) => c.grader.mode !== "off",
     set: (c, v) => {
-      c.grader.mode = v ? (c.grader.apiKey ? "api" : "local") : "off";
+      c.grader.mode = !v ? "off" : c.grader.model.startsWith("claude-") ? "claude" : c.grader.apiKey ? "api" : "local";
     },
   },
 ];
@@ -401,7 +401,7 @@ async function initPopup(): Promise<void> {
         ? "sets only"
         : config.grader.mode === "local"
           ? "local"
-          : "api";
+          : config.grader.mode;
     statusLine.textContent = `${cachedCount} filtered · ${modeLabel}`;
   }
 

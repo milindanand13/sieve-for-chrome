@@ -1,6 +1,10 @@
 import {
   API_DEFAULT_ENDPOINT,
   API_DEFAULT_MODEL,
+  CLAUDE_DEFAULT_MODEL,
+  CLAUDE_ENDPOINT,
+  OPENAI_DEFAULT_ENDPOINT,
+  OPENAI_DEFAULT_MODEL,
   DEFAULT_CONFIG,
   DEFAULT_RUBRIC,
   LOCAL_DEFAULT_ENDPOINT,
@@ -19,7 +23,7 @@ import {
   sumStats,
   type Counts,
 } from "../background/stats.js";
-import { isRecord, type GraderMode, type Platform, type SieveConfig } from "../types.js";
+import { isGraderMode, isRecord, type GraderMode, type Platform, type SieveConfig } from "../types.js";
 
 const kv = {
   get: (key: string) => chrome.storage.local.get(key),
@@ -91,8 +95,24 @@ function parseLines(raw: string): string[] {
     .filter(Boolean);
 }
 
+// Menu entries; openai and gemini are presets of the openai-compatible "api" mode.
+const PRESETS: Record<string, { mode: GraderMode; endpoint: string; model: string }> = {
+  local: { mode: "local", endpoint: LOCAL_DEFAULT_ENDPOINT, model: LOCAL_DEFAULT_MODEL },
+  claude: { mode: "claude", endpoint: CLAUDE_ENDPOINT, model: CLAUDE_DEFAULT_MODEL },
+  openai: { mode: "api", endpoint: OPENAI_DEFAULT_ENDPOINT, model: OPENAI_DEFAULT_MODEL },
+  gemini: { mode: "api", endpoint: API_DEFAULT_ENDPOINT, model: API_DEFAULT_MODEL },
+};
+
 function parseGraderMode(val: string): GraderMode {
-  return val === "off" || val === "local" || val === "api" ? val : DEFAULT_CONFIG.grader.mode;
+  return PRESETS[val]?.mode ?? (isGraderMode(val) ? val : DEFAULT_CONFIG.grader.mode);
+}
+
+/** Which menu entry a saved config shows as. */
+function menuValueFor(mode: GraderMode, endpoint: string): string {
+  if (mode !== "api") return mode;
+  if (endpoint === OPENAI_DEFAULT_ENDPOINT) return "openai";
+  if (endpoint === API_DEFAULT_ENDPOINT) return "gemini";
+  return "api";
 }
 
 function requireElement<T extends HTMLElement>(
@@ -134,7 +154,7 @@ async function initOptions(): Promise<void> {
     if (idle(hideDroppedEl)) hideDroppedEl.checked = config.display.hideDropped;
     if (idle(recorderEl)) recorderEl.checked = config.recorder.enabled;
     if (idle(noveltyFilterEl)) noveltyFilterEl.checked = config.noveltyFilter;
-    if (idle(modeEl)) modeEl.value = config.grader.mode;
+    if (idle(modeEl)) modeEl.value = menuValueFor(config.grader.mode, config.grader.endpoint);
     if (idle(holdEl)) holdEl.value = String(config.grader.streamHoldMs);
     if (idle(endpointEl)) endpointEl.value = config.grader.endpoint;
     if (idle(modelEl)) modelEl.value = config.grader.model;
@@ -185,7 +205,8 @@ async function initOptions(): Promise<void> {
 
   // Cloud hosts are optional_host_permissions; ask on a user gesture. Local hosts are granted already.
   async function ensureEndpointPermission(): Promise<boolean> {
-    if (parseGraderMode(modeEl.value) !== "api") return true;
+    const mode = parseGraderMode(modeEl.value);
+    if (mode === "local" || mode === "off") return true;
     try {
       const origin = `${new URL(endpointEl.value.trim()).origin}/*`;
       return await chrome.permissions.request({ origins: [origin] });
@@ -196,15 +217,13 @@ async function initOptions(): Promise<void> {
 
   modeEl.addEventListener("change", () => {
     const nextMode = parseGraderMode(modeEl.value);
-    if (nextMode === "local" && endpointEl.value === API_DEFAULT_ENDPOINT) {
-      endpointEl.value = LOCAL_DEFAULT_ENDPOINT;
-      modelEl.value = LOCAL_DEFAULT_MODEL;
-    } else if (nextMode === "api" && endpointEl.value === LOCAL_DEFAULT_ENDPOINT) {
-      endpointEl.value = API_DEFAULT_ENDPOINT;
-      modelEl.value = API_DEFAULT_MODEL;
+    const preset = PRESETS[modeEl.value];
+    if (preset) {
+      endpointEl.value = preset.endpoint;
+      modelEl.value = preset.model;
     }
     scheduleSave();
-    if (nextMode === "api") {
+    if (nextMode !== "local" && nextMode !== "off") {
       void ensureEndpointPermission().then((ok) => {
         if (!ok && testResult) testResult.textContent = "host permission not granted";
       });

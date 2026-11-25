@@ -1,6 +1,7 @@
 "use strict";
 (() => {
   // src/types.ts
+  var isGraderMode = (v) => v === "off" || v === "local" || v === "api" || v === "claude";
   function isRecord(v) {
     return typeof v === "object" && v !== null && !Array.isArray(v);
   }
@@ -347,7 +348,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
-    const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
+    const mode = isGraderMode(gr.mode) ? gr.mode : d.grader.mode;
     return {
       schemaVersion: SCHEMA_VERSION,
       enabled: bool(stored, "enabled", d.enabled),

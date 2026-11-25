@@ -58,9 +58,12 @@
       <div class="field">
         <label for="grader-mode">mode</label>
         <select id="grader-mode">
-          <option value="local">local (ollama / mlx)</option>
-          <option value="api">api (openai-compatible)</option>
-          <option value="off">off (tiers 0 &amp; 1 only)</option>
+          <option value="local">local, free (ollama)</option>
+          <option value="claude">claude (anthropic api key)</option>
+          <option value="openai">openai (api key)</option>
+          <option value="gemini">gemini (api key)</option>
+          <option value="api">other (openai-compatible endpoint)</option>
+          <option value="off">off (rules only)</option>
         </select>
       </div>
       <div class="field">

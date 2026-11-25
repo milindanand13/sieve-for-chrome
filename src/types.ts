@@ -6,7 +6,9 @@ export type ResolvedVerdict = "keep" | "drop";
 
 export type Verdict = ResolvedVerdict | "uncertain";
 
-export type GraderMode = "off" | "local" | "api";
+export type GraderMode = "off" | "local" | "api" | "claude";
+export const isGraderMode = (v: unknown): v is GraderMode =>
+  v === "off" || v === "local" || v === "api" || v === "claude";
 
 export type JsonRecord = Record<string, unknown>;
 

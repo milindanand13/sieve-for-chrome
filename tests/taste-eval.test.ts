@@ -1,5 +1,7 @@
 // Taste eval on real posts Milind flagged. Runs only with SIEVE_LIVE=1 and local Ollama.
 // SIEVE_MODEL picks the model (default from config).
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { gradeItemsDetailed } from "../src/core/llm.js";
 import { DEFAULT_CONFIG } from "../src/defaults.js";
@@ -31,8 +33,13 @@ export const CASES: Case[] = [
 
 describe.skipIf(!live)("taste eval", () => {
   it("grades the flagged posts the way Milind would", async () => {
-    const model = process.env.SIEVE_MODEL ?? DEFAULT_CONFIG.grader.model;
-    const cfg = { ...DEFAULT_CONFIG, grader: { ...DEFAULT_CONFIG.grader, mode: "local" as const, model } };
+    // SIEVE_MODE=claude reads the key from ANTHROPIC_API_KEY or ~/.config/sieve/anthropic-key.
+    const mode = process.env.SIEVE_MODE === "claude" ? ("claude" as const) : ("local" as const);
+    const keyFile = `${homedir()}/.config/sieve/anthropic-key`;
+    const apiKey =
+      mode === "claude" ? (process.env.ANTHROPIC_API_KEY ?? (existsSync(keyFile) ? readFileSync(keyFile, "utf8").trim() : "")) : "";
+    const model = process.env.SIEVE_MODEL ?? (mode === "claude" ? "claude-haiku-5-5" : DEFAULT_CONFIG.grader.model);
+    const cfg = { ...DEFAULT_CONFIG, grader: { ...DEFAULT_CONFIG.grader, mode, model, apiKey } };
     const t = Date.now();
     const v = await gradeItemsDetailed(CASES, cfg);
     const ms = Date.now() - t;

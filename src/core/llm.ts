@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { isRecord, type FeedItem, type JsonRecord, type SieveConfig } from "../types.js";
 
 const MAX_BATCH_SIZE = 20;
@@ -176,6 +177,7 @@ export async function chatJson(
   timeoutMs: number,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
+  if (config.grader.mode === "claude") return claudeChat(config, system, user, timeoutMs);
   if (!config.grader.endpoint || !config.grader.model) {
     throw new Error("Missing grader endpoint or model");
   }
@@ -227,4 +229,22 @@ export async function chatJson(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Claude through the official SDK. The key is the user's own, kept in local extension storage. */
+async function claudeChat(config: SieveConfig, system: string, user: string, timeoutMs: number): Promise<string> {
+  const apiKey = config.grader.apiKey.trim();
+  if (!apiKey) throw new Error("Missing API key");
+  // Extension service workers look like a browser to the SDK; the key never reaches a web page.
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 1, timeout: timeoutMs });
+  const msg = await client.messages.create({
+    model: config.grader.model || "claude-haiku-5-5",
+    max_tokens: 4096,
+    // A short labeling job: low effort keeps it fast and cheap.
+    output_config: { effort: "low" },
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+  if (msg.stop_reason === "refusal") throw new Error("Claude declined this batch");
+  return msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
 }

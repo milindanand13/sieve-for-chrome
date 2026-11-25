@@ -1,6 +1,7 @@
 "use strict";
 (() => {
   // src/types.ts
+  var isGraderMode = (v) => v === "off" || v === "local" || v === "api" || v === "claude";
   function isRecord(v) {
     return typeof v === "object" && v !== null && !Array.isArray(v);
   }
@@ -19,7 +20,11 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
   var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var API_DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-  var API_DEFAULT_MODEL = "gemini-2.5-flash";
+  var API_DEFAULT_MODEL = "gemini-2.5-flash-lite";
+  var CLAUDE_DEFAULT_MODEL = "claude-haiku-5-5";
+  var CLAUDE_ENDPOINT = "https://api.anthropic.com";
+  var OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1/chat/completions";
+  var OPENAI_DEFAULT_MODEL = "gpt-5.4-nano";
   var DEFAULT_CONFIG = {
     schemaVersion: SCHEMA_VERSION,
     enabled: true,
@@ -86,7 +91,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
-    const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
+    const mode = isGraderMode(gr.mode) ? gr.mode : d.grader.mode;
     return {
       schemaVersion: SCHEMA_VERSION,
       enabled: bool(stored, "enabled", d.enabled),
@@ -270,8 +275,20 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   function parseLines(raw) {
     return raw.split("\n").map((line) => line.trim()).filter(Boolean);
   }
+  var PRESETS = {
+    local: { mode: "local", endpoint: LOCAL_DEFAULT_ENDPOINT, model: LOCAL_DEFAULT_MODEL },
+    claude: { mode: "claude", endpoint: CLAUDE_ENDPOINT, model: CLAUDE_DEFAULT_MODEL },
+    openai: { mode: "api", endpoint: OPENAI_DEFAULT_ENDPOINT, model: OPENAI_DEFAULT_MODEL },
+    gemini: { mode: "api", endpoint: API_DEFAULT_ENDPOINT, model: API_DEFAULT_MODEL }
+  };
   function parseGraderMode(val) {
-    return val === "off" || val === "local" || val === "api" ? val : DEFAULT_CONFIG.grader.mode;
+    return PRESETS[val]?.mode ?? (isGraderMode(val) ? val : DEFAULT_CONFIG.grader.mode);
+  }
+  function menuValueFor(mode, endpoint) {
+    if (mode !== "api") return mode;
+    if (endpoint === OPENAI_DEFAULT_ENDPOINT) return "openai";
+    if (endpoint === API_DEFAULT_ENDPOINT) return "gemini";
+    return "api";
   }
   function requireElement(id, ctor) {
     const el = document.getElementById(id);
@@ -305,7 +322,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       if (idle(hideDroppedEl)) hideDroppedEl.checked = config.display.hideDropped;
       if (idle(recorderEl)) recorderEl.checked = config.recorder.enabled;
       if (idle(noveltyFilterEl)) noveltyFilterEl.checked = config.noveltyFilter;
-      if (idle(modeEl)) modeEl.value = config.grader.mode;
+      if (idle(modeEl)) modeEl.value = menuValueFor(config.grader.mode, config.grader.endpoint);
       if (idle(holdEl)) holdEl.value = String(config.grader.streamHoldMs);
       if (idle(endpointEl)) endpointEl.value = config.grader.endpoint;
       if (idle(modelEl)) modelEl.value = config.grader.model;
@@ -349,7 +366,8 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       }, immediate ? 0 : 180);
     }
     async function ensureEndpointPermission() {
-      if (parseGraderMode(modeEl.value) !== "api") return true;
+      const mode = parseGraderMode(modeEl.value);
+      if (mode === "local" || mode === "off") return true;
       try {
         const origin = `${new URL(endpointEl.value.trim()).origin}/*`;
         return await chrome.permissions.request({ origins: [origin] });
@@ -359,15 +377,13 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     }
     modeEl.addEventListener("change", () => {
       const nextMode = parseGraderMode(modeEl.value);
-      if (nextMode === "local" && endpointEl.value === API_DEFAULT_ENDPOINT) {
-        endpointEl.value = LOCAL_DEFAULT_ENDPOINT;
-        modelEl.value = LOCAL_DEFAULT_MODEL;
-      } else if (nextMode === "api" && endpointEl.value === LOCAL_DEFAULT_ENDPOINT) {
-        endpointEl.value = API_DEFAULT_ENDPOINT;
-        modelEl.value = API_DEFAULT_MODEL;
+      const preset = PRESETS[modeEl.value];
+      if (preset) {
+        endpointEl.value = preset.endpoint;
+        modelEl.value = preset.model;
       }
       scheduleSave();
-      if (nextMode === "api") {
+      if (nextMode !== "local" && nextMode !== "off") {
         void ensureEndpointPermission().then((ok) => {
           if (!ok && testResult) testResult.textContent = "host permission not granted";
         });

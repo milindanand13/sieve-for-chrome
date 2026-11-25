@@ -1,6 +1,7 @@
 "use strict";
 (() => {
   // src/types.ts
+  var isGraderMode = (v) => v === "off" || v === "local" || v === "api" || v === "claude";
   function isRecord(v) {
     return typeof v === "object" && v !== null && !Array.isArray(v);
   }
@@ -84,7 +85,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
-    const mode = gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
+    const mode = isGraderMode(gr.mode) ? gr.mode : d.grader.mode;
     return {
       schemaVersion: SCHEMA_VERSION,
       enabled: bool(stored, "enabled", d.enabled),
@@ -156,7 +157,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       label: "tier 2 local / api grader",
       get: (c) => c.grader.mode !== "off",
       set: (c, v) => {
-        c.grader.mode = v ? c.grader.apiKey ? "api" : "local" : "off";
+        c.grader.mode = !v ? "off" : c.grader.model.startsWith("claude-") ? "claude" : c.grader.apiKey ? "api" : "local";
       }
     }
   ];
@@ -472,7 +473,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const statusLine = document.getElementById("status-line");
     function updateStatusMode() {
       if (!statusLine) return;
-      const modeLabel = config.grader.mode === "off" ? "sets only" : config.grader.mode === "local" ? "local" : "api";
+      const modeLabel = config.grader.mode === "off" ? "sets only" : config.grader.mode === "local" ? "local" : config.grader.mode;
       statusLine.textContent = `${cachedCount} filtered \xB7 ${modeLabel}`;
     }
     renderAll();

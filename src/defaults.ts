@@ -1,4 +1,4 @@
-import { isRecord, type SieveConfig } from "./types.js";
+import { isGraderMode, isRecord, type SieveConfig } from "./types.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -18,7 +18,12 @@ export const LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completion
 export const LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
 
 export const API_DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-export const API_DEFAULT_MODEL = "gemini-2.5-flash";
+export const API_DEFAULT_MODEL = "gemini-2.5-flash-lite";
+
+export const CLAUDE_DEFAULT_MODEL = "claude-haiku-5-5";
+export const CLAUDE_ENDPOINT = "https://api.anthropic.com";
+export const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1/chat/completions";
+export const OPENAI_DEFAULT_MODEL = "gpt-5.4-nano";
 
 export const DEFAULT_CONFIG: SieveConfig = {
   schemaVersion: SCHEMA_VERSION,
@@ -91,7 +96,7 @@ export function mergeConfig(stored?: unknown): SieveConfig {
   const rec = isRecord(stored.recorder) ? stored.recorder : {};
   const d = DEFAULT_CONFIG;
   const mode =
-    gr.mode === "off" || gr.mode === "local" || gr.mode === "api" ? gr.mode : d.grader.mode;
+    isGraderMode(gr.mode) ? gr.mode : d.grader.mode;
 
   return {
     schemaVersion: SCHEMA_VERSION,
