@@ -68,7 +68,7 @@ Firefox lets an extension rewrite a site's feed data inside the browser's networ
 ## 1. Clone
 
 ```bash
-git clone --recurse-submodules https://github.com/milindanand13/sieve.git ~/sieve
+git clone --recurse-submodules https://github.com/milindanand13/sieve-for-chrome.git ~/sieve
 cd ~/sieve
 ```
 
@@ -109,6 +109,6 @@ SIEVE_LIVE=1 npx vitest run tests/taste-eval.test.ts
 
 ---
 
-- [Fork this repository](https://github.com/milindanand13/sieve/fork)
-- [Watch this repo](https://github.com/milindanand13/sieve/subscription)
-- [Create issue](https://github.com/milindanand13/sieve/issues/new)
+- [Fork this repository](https://github.com/milindanand13/sieve-for-chrome/fork)
+- [Watch this repo](https://github.com/milindanand13/sieve-for-chrome/subscription)
+- [Create issue](https://github.com/milindanand13/sieve-for-chrome/issues/new)
