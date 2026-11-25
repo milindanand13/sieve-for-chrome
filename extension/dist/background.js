@@ -29387,7 +29387,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const cachedVerdict = memory2.getItemVerdict(item.platform, item.id);
     if (cachedVerdict) {
       const original = memory2.getItemReason?.(item.platform, item.id);
-      return { verdict: cachedVerdict, reason: original ? `${original} (cached)` : "cached verdict" };
+      return { verdict: cachedVerdict, reason: original ?? "cached verdict" };
     }
     for (const key of keys) {
       const learned = memory2.getCreatorVerdict(item.platform, key);

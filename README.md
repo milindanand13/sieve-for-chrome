@@ -12,6 +12,13 @@ By Milind Anand, built with Claude Code. Based on Teddy Warner's original Firefo
 
 *Bait titles rewritten to say what the video is: "Watch THIS Before You Buy A Camera In 2026" became "Camera buying advice for 2026".*
 
+<p>
+<img src="docs/images/x-dimmed.png" width="49%" alt="Sieve on an X home timeline: an engagement-hook post is greyed out with the label 'sieve: grader: engagement-hook hype' and 👍/👎 buttons, while the next ordinary post stays normal. Names and avatars are blurred.">
+<img src="docs/images/instagram-dimmed.png" width="49%" alt="Sieve on an Instagram home feed: a business promo post is greyed out with the label 'sieve: grader: business promo' and 👍/👎 buttons. Names are blurred.">
+</p>
+
+*X and Instagram: graded straight off the page. Names and avatars blurred for this README.*
+
 ---
 
 ## How it works

@@ -211,7 +211,7 @@ describe("cached verdict reason", () => {
     const it1 = item("v1", "some vague title here");
     await runSieveDetailed([it1], DEFAULT_CONFIG, seeds, mem, fetchReply('{"drop":["0"],"why":{"0":"vague bait"}}'));
     const again = await runSieveDetailed([it1], DEFAULT_CONFIG, seeds, mem, fetchReply("{}"));
-    expect(again.get("v1")).toBe("grader: vague bait (cached)");
+    expect(again.get("v1")).toBe("grader: vague bait");
   });
 });
 

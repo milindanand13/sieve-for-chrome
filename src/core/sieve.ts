@@ -126,7 +126,8 @@ export function evaluateLocalDecision(
   const cachedVerdict = memory.getItemVerdict(item.platform, item.id);
   if (cachedVerdict) {
     const original = memory.getItemReason?.(item.platform, item.id);
-    return { verdict: cachedVerdict, reason: original ? `${original} (cached)` : "cached verdict" };
+    // Same label as the first time; whether it came from the cache is noise to the reader.
+    return { verdict: cachedVerdict, reason: original ?? "cached verdict" };
   }
 
   for (const key of keys) {
