@@ -140,6 +140,7 @@ async function initOptions(): Promise<void> {
   const modelEl = requireElement("grader-model", HTMLInputElement);
   const keyEl = requireElement("grader-key", HTMLInputElement);
   const rubricEl = requireElement("grader-rubric", HTMLTextAreaElement);
+  const aboutEl = requireElement("grader-about", HTMLTextAreaElement);
   const allowEl = requireElement("allow-handles", HTMLTextAreaElement);
   const blockEl = requireElement("block-handles", HTMLTextAreaElement);
   const testBtn = requireElement("test-grader", HTMLButtonElement);
@@ -160,6 +161,7 @@ async function initOptions(): Promise<void> {
     if (idle(modelEl)) modelEl.value = config.grader.model;
     if (idle(keyEl)) keyEl.value = config.grader.apiKey;
     if (idle(rubricEl)) rubricEl.value = config.grader.rubric;
+    if (idle(aboutEl)) aboutEl.value = config.grader.aboutMe;
     if (idle(allowEl)) allowEl.value = config.allowHandles.join("\n");
     if (idle(blockEl)) blockEl.value = config.blockHandles.join("\n");
   }
@@ -179,7 +181,7 @@ async function initOptions(): Promise<void> {
       // Re-read so changes made elsewhere since this tab opened are not written back stale.
       const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
       // Old verdicts were graded under the old rubric, so drop them when it changes.
-      const rubricChanged = fresh.grader.rubric !== rubricEl.value;
+      const rubricChanged = fresh.grader.rubric !== rubricEl.value || fresh.grader.aboutMe !== aboutEl.value;
       const config = fresh;
       config.display.hideDropped = hideDroppedEl.checked;
       config.recorder.enabled = recorderEl.checked;
@@ -194,6 +196,7 @@ async function initOptions(): Promise<void> {
       config.grader.model = modelEl.value.trim();
       config.grader.apiKey = keyEl.value.trim();
       config.grader.rubric = rubricEl.value;
+      config.grader.aboutMe = aboutEl.value;
       config.allowHandles = parseLines(allowEl.value);
       config.blockHandles = parseLines(blockEl.value);
 
@@ -240,6 +243,7 @@ async function initOptions(): Promise<void> {
     modelEl,
     keyEl,
     rubricEl,
+    aboutEl,
     allowEl,
     blockEl,
   ]) {

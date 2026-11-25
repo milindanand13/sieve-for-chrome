@@ -67,7 +67,9 @@ describe.skipIf(!live)("taste eval", () => {
     const apiKey =
       mode === "claude" ? (process.env.ANTHROPIC_API_KEY ?? (existsSync(keyFile) ? readFileSync(keyFile, "utf8").trim() : "")) : "";
     const model = process.env.SIEVE_MODEL ?? (mode === "claude" ? "claude-haiku-5-5" : DEFAULT_CONFIG.grader.model);
-    const cfg = { ...DEFAULT_CONFIG, grader: { ...DEFAULT_CONFIG.grader, mode, model, apiKey } };
+    // A sample "About you" like the one a user types in Settings.
+    const aboutMe = "A photographer and filmmaker who climbs. Funny memes are fine. Cats always stay.";
+    const cfg = { ...DEFAULT_CONFIG, grader: { ...DEFAULT_CONFIG.grader, mode, model, apiKey, aboutMe } };
     const t = Date.now();
     const set = process.env.SIEVE_SET === "hard" ? HARD : CASES;
     const v = await gradeItemsDetailed(set, cfg);

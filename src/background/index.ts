@@ -76,7 +76,8 @@ async function initConfigAndSeeds(): Promise<void> {
     config = mergeConfig(stored.sieveConfig);
     const sr: unknown = stored.sieveConfig;
     const storedRubric = isRecord(sr) && isRecord(sr.grader) ? sr.grader.rubric : undefined;
-    if (typeof storedRubric === "string" && storedRubric !== config.grader.rubric) {
+    const storedAbout = isRecord(sr) && isRecord(sr.grader) ? sr.grader.aboutMe : undefined;
+    if (typeof storedRubric === "string" && (storedRubric !== config.grader.rubric || storedAbout !== config.grader.aboutMe)) {
       // An old built-in rubric was upgraded: verdicts graded under it go, your own calls stay.
       await memory.ready;
       await memory.clear({ keepUser: true });
@@ -321,6 +322,7 @@ function parseGraderOverride(raw: unknown): GraderSettings | undefined {
     model: raw.model,
     apiKey: raw.apiKey,
     rubric: raw.rubric,
+    aboutMe: typeof raw.aboutMe === "string" ? raw.aboutMe : "",
     streamHoldMs: raw.streamHoldMs,
   };
 }

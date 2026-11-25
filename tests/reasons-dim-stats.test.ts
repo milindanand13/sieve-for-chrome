@@ -291,10 +291,9 @@ describe("defaults and rubric", () => {
     expect(mergeConfig({}).tiktok.enabled).toBe(false);
   });
 
-  it("rubric keeps photography, filmmaking, media and climbing", () => {
+  it("default rubric keeps creative work and stays neutral (personal taste goes in About you)", () => {
     const lower = DEFAULT_RUBRIC.toLowerCase();
-    for (const topic of ["photography", "filmmaking", "cinematography", "journalism", "outdoor sports"]) {
-      expect(lower).toContain(topic);
-    }
+    for (const topic of ["photography", "film", "music", "art", "science", "memes"]) expect(lower).toContain(topic);
+    for (const personal of ["brooklyn", "india", "climb", "media studies"]) expect(lower).not.toContain(personal);
   });
 });

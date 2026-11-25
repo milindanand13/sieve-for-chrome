@@ -249,16 +249,31 @@
 
   // src/defaults.ts
   var SCHEMA_VERSION = 1;
-  var DEFAULT_RUBRIC = `You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.
+  var DEFAULT_RUBRIC = `You filter a social feed for one person. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.
 
-Keep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators. Funny memes are fine: never drop a post just for being a meme. Cats always stay.
+Keep: genuine human craft and curiosity, engineering, science, design, art, photography, film, music and live sets, film and TV trailers, writing and criticism, stand-up comedy, sports played or explained, timely primary news, earnest humor and funny memes, animals, and ordinary updates from real people, even from tiny unknown creators.
 
-Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for the guide", siren-emoji fake breaking news), stories or threads cut off mid-sentence so you have to open them, sponsored or partner posts, hustle or crypto grifts, manufactured anxiety, and ads or promos.`;
-  var OLD_DEFAULT_RUBRICS = /* @__PURE__ */ new Set([
-    'You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.\n\nKeep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators.\n\nDrop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking news), hustle or crypto grifts, manufactured anxiety, and ads or promos.',
-    'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.\n\nKEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:\n- photography\n- filmmaking and cinematography\n- media: journalism, criticism, and production\n- outdoor sports',
-    'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.'
+Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for the guide", siren-emoji fake breaking news), stories or threads cut off mid-sentence so you have to open them, hustle or crypto grifts, manufactured anxiety, and ads, sponsored posts or promos.`;
+  function rubricHash(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
+  }
+  var OLD_DEFAULT_RUBRIC_HASHES = /* @__PURE__ */ new Set([
+    "93423b03",
+    "4e86f553",
+    "e0d2b94a",
+    "818280cc"
   ]);
+  function aboutFromOldRubric(rubric) {
+    const m = /^You filter a feed for one person: ([^.]+)\./.exec(rubric);
+    if (!m?.[1]) return "";
+    const who = m[1].replace(/^an? /, "").trim();
+    return `${who.charAt(0).toUpperCase()}${who.slice(1)}.${rubric.includes("Cats always stay") ? " Cats always stay." : ""}`;
+  }
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
   var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
@@ -303,6 +318,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       model: LOCAL_DEFAULT_MODEL,
       apiKey: "",
       rubric: DEFAULT_RUBRIC,
+      aboutMe: "",
       streamHoldMs: 1500
     },
     display: { hideDropped: false },
@@ -328,6 +344,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
     const d = DEFAULT_CONFIG;
     const mode = isGraderMode(gr.mode) ? gr.mode : d.grader.mode;
+    const oldRubric = typeof gr.rubric === "string" && OLD_DEFAULT_RUBRIC_HASHES.has(rubricHash(gr.rubric));
     return {
       schemaVersion: SCHEMA_VERSION,
       enabled: bool(stored, "enabled", d.enabled),
@@ -369,7 +386,8 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         endpoint: typeof gr.endpoint === "string" ? gr.endpoint : d.grader.endpoint,
         model: typeof gr.model === "string" ? gr.model : d.grader.model,
         apiKey: typeof gr.apiKey === "string" ? gr.apiKey : d.grader.apiKey,
-        rubric: typeof gr.rubric === "string" && !OLD_DEFAULT_RUBRICS.has(gr.rubric) ? gr.rubric : d.grader.rubric,
+        rubric: typeof gr.rubric === "string" && !oldRubric ? gr.rubric : d.grader.rubric,
+        aboutMe: typeof gr.aboutMe === "string" ? gr.aboutMe : oldRubric ? aboutFromOldRubric(gr.rubric) : d.grader.aboutMe,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
       display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },

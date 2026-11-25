@@ -57,6 +57,8 @@ export interface GraderSettings {
   model: string;
   apiKey: string;
   rubric: string;
+  /** The user's own description of who they are; prepended to the rubric. */
+  aboutMe: string;
   streamHoldMs: number;
 }
 
