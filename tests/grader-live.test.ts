@@ -10,7 +10,8 @@ import type { FeedItem } from "../src/types.js";
 const live = process.env.SIEVE_LIVE === "1";
 const dir = path.join(process.cwd(), "tests", "fixtures");
 const urlsFile = path.join(dir, "urls.json");
-const NOTES = "grader-latency.md";
+// Optional: SIEVE_NOTES=<path> writes the latency table to a file.
+const NOTES = process.env.SIEVE_NOTES;
 
 async function itemsFromFixtures(): Promise<FeedItem[]> {
   const urls: Record<string, string> = JSON.parse(readFileSync(urlsFile, "utf8"));
@@ -73,6 +74,6 @@ describe.skipIf(!live || !existsSync(urlsFile))("live grader (Ollama)", () => {
       ...rows.map((r) => `| ${r.size} | ${r.ms} | ${r.judged} | ${r.dropped} | ${r.unsure} |`),
       "",
     );
-    writeFileSync(NOTES, lines.join("\n"));
+    if (NOTES) writeFileSync(NOTES, lines.join("\n"));
   }, 600_000);
 });

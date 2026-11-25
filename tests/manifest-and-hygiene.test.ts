@@ -15,6 +15,8 @@ function walkTextFiles(dir: string, out: string[] = []): string[] {
       entry.name === "vendor" ||
       entry.name === "seeds" ||
       entry.name === "fixtures" ||
+      entry.name === "data" || // bench/data: real feed posts, gitignored
+      entry.name === "dist" || // built bundles include third-party SDK text; src is checked
       entry.name === "fonts"
     ) {
       continue;
