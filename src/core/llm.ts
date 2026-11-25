@@ -97,9 +97,9 @@ function summarizeIndexedItem(item: FeedItem, index: number) {
 }
 
 const VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with one letter:
-- "k" = keep: craft, engineering, science, design, art, photography, film, music (including live sets and DJ mixes), film/TV trailers and reviews, stand-up comedy, sports played or explained, demos, links, dry humor, real opinions, weird rabbit holes, or normal human updates even if only a few words long
+- "k" = keep: craft, engineering, science, design, art, photography, film, music (including live sets and DJ mixes), film/TV trailers and reviews, stand-up comedy, funny memes, cats, sports played or explained, demos, links, dry humor, real opinions, weird rabbit holes, or normal human updates even if only a few words long
 - "u" = unsure (kept)
-- "d" = drop: ragebait, political or culture-war outrage, dunking, public humiliation, celebrity or influencer gossip about private lives, crypto or hustle grifts, DM-funnel bait, short-drama cliffhangers, AI voiceover or AI-generated slop, viral shock clips (fights, "kalesh", accidents, dash-cam, snakes, crowds filming an incident, "watch till the end"), relationship and dating drama or "am I crazy / AITA" bait, reaction or repost aggregator accounts, and ads, upsells or promos
+- "d" = drop: ragebait, political or culture-war outrage, dunking, public humiliation, celebrity or influencer gossip about private lives, crypto or hustle grifts, DM-funnel bait, short-drama cliffhangers, AI voiceover or AI-generated slop, viral shock clips (fights, "kalesh", accidents, dash-cam, snakes, crowds filming an incident, "watch till the end"), relationship and dating drama or "am I crazy / AITA" bait, stories or threads cut off mid-sentence to make you open them, "comment X for the guide" bait, reaction or repost aggregator accounts, and ads, upsells or promos
 "f":1 means the user follows this account: keep their own posts unless they are clearly one of the drop types.
 "Celebrity gossip" is talk about people's private lives. An "Official Trailer" or teaser that lists actor names is a trailer: keep it. Stand-up comedy and interviews about work are not gossip.
 

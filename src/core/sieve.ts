@@ -13,7 +13,11 @@ import { gradeItemsDetailed, type GraderVerdict } from "./llm.js";
 import { isStructuralSlop } from "./slop-cadence.js";
 
 const COMMENT_BAIT_RE =
-  /\bcomment\s+["'“”]?[a-z0-9_-]{2,20}["'“”]?\s+(and\s+i'?ll|to\s+get|for\s+the|for\s+my)\s+(dm|send|link|free|guide|template)\b/i;
+  /\b(?:comment|reply|type|dm me)\s+["'“”‘’]?[a-z0-9_-]{2,20}["'“”‘’]?\s+(?:and|to|for|below)\b[^\n.!?]{0,40}?\b(?:dm|send|link|free|guide|template|setup|pdf|prompts?|access|course|list|checklist|ebook)\b/i;
+
+// Paid posts the creator labels in the caption: #ad, #sponsored, #[brand]partner, "paid partnership".
+const PAID_TAG_RE =
+  /(?:^|\s)#(?:ad|ads|advert|sponsored|sponsor|spon|paidpartnership|paidpartner|partner|brandpartner|gifted|collab|[a-z0-9]{2,30}partner|[a-z0-9]{2,30}ambassador)\b|\bpaid partnership with\b/i;
 
 const CRYPTO_CASINO_SPAM_RE =
   /\b(use\s+code\s+\w+\s+on\s+stake|100x\s+memecoin|telegram\s+pump\s+group|free\s+airdrop\s+link\s+in\s+bio)\b/i;
@@ -23,6 +27,9 @@ const SHORT_DRAMA_RE =
 
 const ATTENTION_TRAP_RE =
   /(?:🚨+\s*(?:breaking|just\s+in|huge|urgent)\b.*(?:\bkilled\b|\bover\s+for\b|\binsane\b|\bforever\b|🧵)|\b\d+\s+(?:ai\s+)?(?:websites|tools|prompts|extensions|repos)\s+that\s+feel\s+illegal\s+to\s+know\b|\bbookmark\s+this\s+before\s+it(?:'s|\s+is|\s+gets)\s+deleted\b|\bwrong\s+answers\s+only\b|#(?:redditstories|aita)\b.*#(?:minecraft|subwaysurfers|satisfying)\b)/i;
+
+// Film and TV trailers are kept outright: the small model tends to read actor names as gossip.
+const TRAILER_RE = /\b(?:official\s+)?(?:trailer|teaser)\b/i;
 
 const GOSSIP_DOMAIN_RE =
   /\b(?:celebrity|reality\s*tv|k-?pop\s*stan|tabloid|love\s*island|kardashian)\b/i;
@@ -72,6 +79,7 @@ export function evaluateLocalDecision(
   if (own && ownVerdict) return { verdict: ownVerdict, reason: own };
 
   if (item.isSponsored) return DROP("sponsored");
+  if (PAID_TAG_RE.test(`${item.titleOrText} ${item.secondaryText ?? ""}`)) return DROP("paid post");
 
   const keys = creatorKeysFor(item);
   if (config.blockHandles.length > 0) {
@@ -93,6 +101,7 @@ export function evaluateLocalDecision(
   if (ytIds.some((vid) => seeds.hnVideos.has(vid))) return KEEP("hn video link");
 
   if (keys.some((k) => seeds.slopChannels.has(k))) return DROP("slop list");
+  if (item.platform === "youtube" && TRAILER_RE.test(item.titleOrText)) return KEEP("trailer");
 
   const fullText = `${item.titleOrText} ${item.secondaryText ?? ""}`;
   if (COMMENT_BAIT_RE.test(fullText)) return DROP("comment bait");

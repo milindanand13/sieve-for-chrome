@@ -28618,9 +28618,9 @@ Please migrate to a newer model. Visit https://docs.anthropic.com/en/docs/resour
     };
   }
   var VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with one letter:
-- "k" = keep: craft, engineering, science, design, art, photography, film, music (including live sets and DJ mixes), film/TV trailers and reviews, stand-up comedy, sports played or explained, demos, links, dry humor, real opinions, weird rabbit holes, or normal human updates even if only a few words long
+- "k" = keep: craft, engineering, science, design, art, photography, film, music (including live sets and DJ mixes), film/TV trailers and reviews, stand-up comedy, funny memes, cats, sports played or explained, demos, links, dry humor, real opinions, weird rabbit holes, or normal human updates even if only a few words long
 - "u" = unsure (kept)
-- "d" = drop: ragebait, political or culture-war outrage, dunking, public humiliation, celebrity or influencer gossip about private lives, crypto or hustle grifts, DM-funnel bait, short-drama cliffhangers, AI voiceover or AI-generated slop, viral shock clips (fights, "kalesh", accidents, dash-cam, snakes, crowds filming an incident, "watch till the end"), relationship and dating drama or "am I crazy / AITA" bait, reaction or repost aggregator accounts, and ads, upsells or promos
+- "d" = drop: ragebait, political or culture-war outrage, dunking, public humiliation, celebrity or influencer gossip about private lives, crypto or hustle grifts, DM-funnel bait, short-drama cliffhangers, AI voiceover or AI-generated slop, viral shock clips (fights, "kalesh", accidents, dash-cam, snakes, crowds filming an incident, "watch till the end"), relationship and dating drama or "am I crazy / AITA" bait, stories or threads cut off mid-sentence to make you open them, "comment X for the guide" bait, reaction or repost aggregator accounts, and ads, upsells or promos
 "f":1 means the user follows this account: keep their own posts unless they are clearly one of the drop types.
 "Celebrity gossip" is talk about people's private lives. An "Official Trailer" or teaser that lists actor names is a trailer: keep it. Stand-up comedy and interviews about work are not gossip.
 
@@ -28780,10 +28780,11 @@ Return ONLY a JSON object mapping each index to its new title, like {"0":"How L.
   var SCHEMA_VERSION = 1;
   var DEFAULT_RUBRIC = `You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.
 
-Keep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators.
+Keep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators. Funny memes are fine: never drop a post just for being a meme. Cats always stay.
 
-Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking news), hustle or crypto grifts, manufactured anxiety, and ads or promos.`;
+Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for the guide", siren-emoji fake breaking news), stories or threads cut off mid-sentence so you have to open them, sponsored or partner posts, hustle or crypto grifts, manufactured anxiety, and ads or promos.`;
   var OLD_DEFAULT_RUBRICS = /* @__PURE__ */ new Set([
+    'You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.\n\nKeep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators.\n\nDrop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking news), hustle or crypto grifts, manufactured anxiety, and ads or promos.',
     'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.\n\nKEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:\n- photography\n- filmmaking and cinematography\n- media: journalism, criticism, and production\n- outdoor sports',
     'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.'
   ]);
@@ -29295,10 +29296,12 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   }
 
   // src/core/sieve.ts
-  var COMMENT_BAIT_RE = /\bcomment\s+["'“”]?[a-z0-9_-]{2,20}["'“”]?\s+(and\s+i'?ll|to\s+get|for\s+the|for\s+my)\s+(dm|send|link|free|guide|template)\b/i;
+  var COMMENT_BAIT_RE = /\b(?:comment|reply|type|dm me)\s+["'“”‘’]?[a-z0-9_-]{2,20}["'“”‘’]?\s+(?:and|to|for|below)\b[^\n.!?]{0,40}?\b(?:dm|send|link|free|guide|template|setup|pdf|prompts?|access|course|list|checklist|ebook)\b/i;
+  var PAID_TAG_RE = /(?:^|\s)#(?:ad|ads|advert|sponsored|sponsor|spon|paidpartnership|paidpartner|partner|brandpartner|gifted|collab|[a-z0-9]{2,30}partner|[a-z0-9]{2,30}ambassador)\b|\bpaid partnership with\b/i;
   var CRYPTO_CASINO_SPAM_RE = /\b(use\s+code\s+\w+\s+on\s+stake|100x\s+memecoin|telegram\s+pump\s+group|free\s+airdrop\s+link\s+in\s+bio)\b/i;
   var SHORT_DRAMA_RE = /(?:#(?:reelshort|dramabox|shortdrama|shortdramas|pinedrama|shortmax|minidrama)\b|\/shortdrama\/episode\/|\b(?:part|ep(?:isode)?)\s*\d+\s*[|:-].*\b(?:billionaire|ceo|heiress|secretly\s+marries|alpha\s+wolf|werewolf|mistress)\b)/i;
   var ATTENTION_TRAP_RE = /(?:🚨+\s*(?:breaking|just\s+in|huge|urgent)\b.*(?:\bkilled\b|\bover\s+for\b|\binsane\b|\bforever\b|🧵)|\b\d+\s+(?:ai\s+)?(?:websites|tools|prompts|extensions|repos)\s+that\s+feel\s+illegal\s+to\s+know\b|\bbookmark\s+this\s+before\s+it(?:'s|\s+is|\s+gets)\s+deleted\b|\bwrong\s+answers\s+only\b|#(?:redditstories|aita)\b.*#(?:minecraft|subwaysurfers|satisfying)\b)/i;
+  var TRAILER_RE = /\b(?:official\s+)?(?:trailer|teaser)\b/i;
   var GOSSIP_DOMAIN_RE = /\b(?:celebrity|reality\s*tv|k-?pop\s*stan|tabloid|love\s*island|kardashian)\b/i;
   var YT_URL_ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:[^\s#"'<>]*&)?v=|embed\/|v\/))([A-Za-z0-9_-]{11})/gi;
   function extractYouTubeIdsFromText(text) {
@@ -29326,6 +29329,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const ownVerdict = own?.startsWith("you: ") ? memory2.getItemVerdict(item.platform, item.id) : void 0;
     if (own && ownVerdict) return { verdict: ownVerdict, reason: own };
     if (item.isSponsored) return DROP("sponsored");
+    if (PAID_TAG_RE.test(`${item.titleOrText} ${item.secondaryText ?? ""}`)) return DROP("paid post");
     const keys = creatorKeysFor(item);
     if (config2.blockHandles.length > 0) {
       const blocked = new Set(config2.blockHandles.map((h) => normalizeHandle(h)).filter(Boolean));
@@ -29340,6 +29344,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const ytIds = item.linkedYoutubeIds ?? extractYouTubeIdsFromText(item.titleOrText);
     if (ytIds.some((vid) => seeds2.hnVideos.has(vid))) return KEEP("hn video link");
     if (keys.some((k) => seeds2.slopChannels.has(k))) return DROP("slop list");
+    if (item.platform === "youtube" && TRAILER_RE.test(item.titleOrText)) return KEEP("trailer");
     const fullText = `${item.titleOrText} ${item.secondaryText ?? ""}`;
     if (COMMENT_BAIT_RE.test(fullText)) return DROP("comment bait");
     if (CRYPTO_CASINO_SPAM_RE.test(fullText)) return DROP("crypto spam");

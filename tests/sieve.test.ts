@@ -33,6 +33,16 @@ describe("evaluateLocalTiers", () => {
     expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
   });
 
+  it("drops paid posts tagged in the caption and catches comment-for-guide bait", () => {
+    const base = { platform: "instagram" as const, surface: "timeline" as const, creatorHandle: "liked_creator" };
+    const paid: FeedItem = { ...base, id: "p1", titleOrText: "For anyone who hates making slides #ai #gammapartner" };
+    const bait: FeedItem = { ...base, id: "p2", titleOrText: "Comment “gamma” for the setup guide👇" };
+    const fine: FeedItem = { ...base, id: "p3", titleOrText: "Weekend in the Catskills #adventure with my partner" };
+    expect(evaluateLocalTiers(paid, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
+    expect(evaluateLocalTiers(bait, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
+    expect(evaluateLocalTiers(fine, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("uncertain");
+  });
+
   it("sends followed creators to the grader instead of passing them", () => {
     const item: FeedItem = {
       platform: "instagram",

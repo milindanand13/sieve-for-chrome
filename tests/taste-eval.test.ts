@@ -28,6 +28,10 @@ export const CASES: Case[] = [
   c("youtube", "mkbhd", "Marques Brownlee", "Best Gifts Under $50 | MKBHD Holiday Gift Guide", "k"),
   c("x", "dashcam", "clipdump", "Watch this SHOCKING dash-cam video recorded from my brother's car", "d"),
   c("instagram", "friend", "a_friend", "Sunday hike with the crew, finally made it to the top", "k"),
+  c("x", "bikestory", "storyteller", "Publiqué una bicicleta usada en Marketplace por $180.000. Una chica me ofreció $150.000 y le dije que por $160.000 era suya. Una hora después un tipo me ofreció los $180.000 en efectivo. No lo pensé demasiado. Le dije: \"Dale, ven", "d"),
+  c("instagram", "gamma", "slides_guy", "For anyone who hates making slides\n\nComment “gamma” for the setup guide👇\n\n#ai", "d"),
+  c("instagram", "cat", "catdaily", "my cat refuses to get off the keyboard during every meeting 😭", "k"),
+  c("x", "meme", "memeacct", "me opening the fridge for the 9th time hoping new food appeared", "k"),
   c("instagram", "fight", "kalesh_india", "Two aunties fighting over a parking spot in Delhi 😭 #kalesh", "d"),
 ];
 
@@ -37,7 +41,7 @@ export const HARD: Case[] = [
   c("x", "h2", "newsdesk", "Supreme Court strikes down the state's ban on drag shows, 6-3. Full opinion linked.", "k"),
   c("x", "h3", "angrytakes", "Gen Z will never own a home and boomers are laughing at us. Wake up.", "d"),
   c("x", "h4", "filmtwit", "The opening shot of Children of Men is 4 minutes with no cut. Here's how they rigged the car.", "k"),
-  c("x", "h5", "memepage", "POV: you're the main character and everyone else is an NPC 💀", "d"),
+  c("x", "h5", "memepage", "POV: you're the main character and everyone else is an NPC 💀", "k"),
   c("x", "h6", "desi_vibes", "Bride walks out of her own wedding after groom's family demands dowry, video goes viral", "d"),
   c("x", "h7", "kitchen_nani", "My nani's dal tadka. Ghee first, then jeera until it crackles, then hing.", "k"),
   c("x", "h8", "ai_hustler", "I made $40k in 30 days with this ChatGPT side hustle. Reply 'AI' and I'll DM you the prompt.", "d"),
