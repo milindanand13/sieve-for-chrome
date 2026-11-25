@@ -4,3 +4,5 @@
 .DS_Store
 /tests/fixtures/
 /bench/data/
+/personal/
+/extension/assets/seeds/personal-*.txt

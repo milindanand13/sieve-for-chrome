@@ -31136,7 +31136,10 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
       loadSeedSet("assets/seeds/hn-videos.txt", seeds.hnVideos),
       loadSeedSet("assets/seeds/hn-channels.txt", seeds.hnChannels),
       loadSeedSet("assets/seeds/slop-channels.txt", seeds.slopChannels),
-      loadSeedSet("assets/seeds/slop-warn-channels.txt", seeds.warnChannels)
+      loadSeedSet("assets/seeds/slop-warn-channels.txt", seeds.warnChannels),
+      // Optional personal keep lists, built locally and never shipped (missing files are skipped).
+      loadSeedSet("assets/seeds/personal-keep.txt", seeds.hnChannels),
+      loadSeedSet("assets/seeds/personal-videos.txt", seeds.hnVideos)
     ]);
   }
   var ready;
