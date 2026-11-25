@@ -88,7 +88,7 @@ Hover any card and 👍 / 👎 appear on its left edge. Or right-click the card 
 
 ### 6. Smaller cleanups
 
-Shouty titles are calmed (less ALL CAPS, fewer "!!!"). Bait YouTube titles ("What Happened to L.L. Bean?", "I tested...", titles ending in a question) are swapped for ones that say what the video covers. Sieve first uses a title written by the [DeArrow](https://dearrow.ajay.app/) community; if there is none, it reads the creator's description and has the grader write one, such as "Reviewing L.L. Bean products like bean boots, field coats, and wool sweaters". Hover a swapped title to see the original. Thumbnails show a frame from the middle of the video instead of the designed one. X gets the old bird logo back and a quieter sidebar.
+Shouty titles are calmed (less ALL CAPS, fewer "!!!"). Bait YouTube titles ("What Happened to L.L. Bean?", "I tested...", titles ending in a question) are swapped for ones that say what the video covers. Sieve first uses a title written by the [DeArrow](https://dearrow.ajay.app/) community; if there is none, it reads the creator's description and has the grader write one, such as "Reviewing L.L. Bean products like bean boots, field coats, and wool sweaters". Hover a swapped title to see the original. Thumbnails show the frame DeArrow volunteers picked, or else a frame from the middle of the video, instead of the designed one. X gets the old bird logo back and a quieter sidebar.
 
 ### 7. What leaves your computer
 
