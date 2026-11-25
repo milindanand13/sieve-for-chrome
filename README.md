@@ -103,6 +103,8 @@ ollama serve
 
 You don't need to set `OLLAMA_ORIGINS`. Or switch **mode** to `api` in **Settings** to use any OpenAI-compatible chat completions endpoint.
 
+The local grader is the default: it's free and nothing leaves your computer. For a little more accuracy, set **mode** to **claude haiku** in **Settings** and paste an [Anthropic API key](https://console.anthropic.com/). On 200 real feed posts, Claude Haiku graded 94% right against 89% for the local model, and caught about 3 times as many of the posts worth dimming (18 of 23 against 6). It costs about $1 a month at 1,000 posts a day.
+
 ## 4. Build from source (optional)
 
 Prebuilt bundles are in `extension/dist/`. If you change `src/` or refresh the seed lists:
