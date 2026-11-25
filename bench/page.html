@@ -1,0 +1,164 @@
+<title>Sieve Grader Check</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: one narrow column of cards, sticky progress bar, posts first then titles. */
+:root {
+  --bg: #f3f5f4; --card: #ffffff; --fg: #1b2421; --muted: #5d6b66; --line: #d9e0dd;
+  --keep: #1f7a5a; --keep-soft: #e1f2ea; --dim: #8a5a12; --dim-soft: #f7ecd8; --accent: #2b5d8a; --accent-soft: #e3edf6;
+  --display: "Space Grotesk", "Inter", system-ui, sans-serif; --body: "Inter", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121715; --card: #1a211e; --fg: #e6ece9; --muted: #9aa8a2; --line: #2c3632;
+  --keep: #5cc89d; --keep-soft: #183a2d; --dim: #e0ae5c; --dim-soft: #3a2c14; --accent: #7fb2e0; --accent-soft: #1b2c3c; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121715; --card: #1a211e; --fg: #e6ece9; --muted: #9aa8a2; --line: #2c3632;
+  --keep: #5cc89d; --keep-soft: #183a2d; --dim: #e0ae5c; --dim-soft: #3a2c14; --accent: #7fb2e0; --accent-soft: #1b2c3c; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--body); }
+.wrap { max-width: 680px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 64px; display: grid; gap: 14px; }
+h1, h2 { font-family: var(--display); text-wrap: balance; margin: 0; }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.15rem; margin-top: 18px; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 62ch; }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 8px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.bar strong { color: var(--fg); }
+#status { margin-left: auto; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.chip { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; padding: 2px 7px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.meta a { color: var(--accent); margin-left: auto; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ctx { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+button { font: 600 14px var(--body); padding: 9px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.keep[aria-pressed="true"] { background: var(--keep-soft); border-color: var(--keep); color: var(--keep); }
+button.dim[aria-pressed="true"] { background: var(--dim-soft); border-color: var(--dim); color: var(--dim); }
+button.opt { text-align: left; font-weight: 500; width: 100%; display: grid; gap: 2px; }
+button.opt[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.optlabel { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.reveal { font-size: 13px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; display: grid; gap: 2px; }
+.v-k { color: var(--keep); font-weight: 600; } .v-d { color: var(--dim); font-weight: 600; } .v-u { color: var(--accent); font-weight: 600; }
+.orig { color: var(--muted); font-size: 13px; }
+.note { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--dim-soft); color: var(--fg); }
+@media (prefers-reduced-motion: no-preference) { button { transition: background .12s, border-color .12s; } }
+</style>
+
+<div class="wrap">
+  <header style="display:grid;gap:8px">
+    <h1>Sieve grader check</h1>
+    <p class="lede">Two AI graders, the free local model (qwen) and Claude Haiku, read 200 real posts from your YouTube, X and Instagram feeds. These are every post they disagreed on, mixed with 20 where they agreed. Tap <b>Keep</b> or <b>Dim</b> the way you would want Sieve to treat each one. You will see what each model said only after you answer, and you can change your answer.</p>
+  </header>
+  <div class="bar" role="status"><span>Posts <strong id="pc">0</strong> / <span id="pt">0</span></span><span>Titles <strong id="tc">0</strong> / <span id="tt">0</span></span><span id="status">Connecting…</span></div>
+  <div id="warn" class="note" hidden></div>
+  <section id="posts" style="display:grid;gap:12px" aria-label="Posts"></section>
+  <h2>Plain titles</h2>
+  <p class="lede">Sieve rewrites bait YouTube titles using the video's description. Each card shows the real title and two rewrites in random order. Pick the one you would rather see in your feed.</p>
+  <section id="titles" style="display:grid;gap:12px" aria-label="Titles"></section>
+</div>
+
+<script type="application/json" id="data">/*DATA*/</script>
+<script>
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const answers = {}, picks = {};
+let db = null;
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+const WORD = { k: "keep", u: "unsure (kept)", d: "dim", "-": "no answer" };
+const PLAT = { youtube: "YouTube", x: "X", instagram: "Instagram" };
+
+function verdictLine(name, vs) {
+  const line = el("div");
+  line.append(el("span", "", name + ": "));
+  const same = vs.every((v) => v.v === vs[0].v);
+  const list = same ? [vs[0]] : vs;
+  list.forEach((v, i) => {
+    if (i) line.append(el("span", "", " · "));
+    line.append(el("span", "v-" + (v.v === "-" ? "u" : v.v), WORD[v.v] + (list.length > 1 ? ` (run ${i + 1})` : "")));
+    if (v.why) line.append(el("span", "", ` "${v.why}"`));
+  });
+  return line;
+}
+
+function renderPosts() {
+  const box = $("posts"); box.textContent = "";
+  for (const p of DATA.posts) {
+    const c = el("article", "card");
+    const meta = el("div", "meta");
+    meta.append(el("span", "chip", PLAT[p.platform]), el("span", "", p.by ? "@" + p.by.replace(/^@/, "") : ""));
+    if (/^https:\/\//.test(p.url)) { const a = el("a", "", "Open post ↗"); a.href = p.url; a.target = "_blank"; a.rel = "noopener"; meta.append(a); }
+    c.append(meta, el("p", "text", p.text));
+    if (p.ctx) c.append(el("p", "ctx", p.ctx));
+    const row = el("div", "row");
+    for (const [val, label] of [["keep", "Keep"], ["dim", "Dim"]]) {
+      const b = el("button", val, label); b.type = "button"; b.id = `b-${p.key}-${val}`;
+      b.setAttribute("aria-pressed", String(answers[p.key] === val));
+      b.onclick = () => save("answers", p.key, { a: val }, () => { answers[p.key] = val; });
+      row.append(b);
+    }
+    c.append(row);
+    if (answers[p.key]) {
+      const r = el("div", "reveal");
+      r.append(verdictLine("qwen (free, local)", [p.q]), verdictLine("Claude Haiku", p.h));
+      c.append(r);
+    }
+    box.append(c);
+  }
+}
+
+function renderTitles() {
+  const box = $("titles"); box.textContent = "";
+  for (const t of DATA.titles) {
+    const c = el("article", "card");
+    c.append(el("p", "orig", "Real title: " + t.orig));
+    const opts = [["a", "Option A", t.a], ["b", "Option B", t.b]];
+    for (const [k, label, o] of opts) {
+      const b = el("button", "opt"); b.type = "button"; b.id = `t-${t.key}-${k}`;
+      b.append(el("span", "optlabel", label + (picks[t.key] ? (o.m === "q" ? " · qwen" : " · Haiku") : "")), el("span", "", o.t === t.orig ? o.t + "  (left unchanged)" : o.t));
+      b.setAttribute("aria-pressed", String(picks[t.key] === o.m));
+      b.onclick = () => save("titles", t.key, { pick: o.m }, () => { picks[t.key] = o.m; });
+      c.append(b);
+    }
+    const none = el("button", "opt"); none.type = "button"; none.id = `t-${t.key}-none`;
+    none.append(el("span", "", "Neither is better than the real title"));
+    none.setAttribute("aria-pressed", String(picks[t.key] === "none"));
+    none.onclick = () => save("titles", t.key, { pick: "none" }, () => { picks[t.key] = "none"; });
+    c.append(none);
+    box.append(c);
+  }
+}
+
+function counts() {
+  $("pc").textContent = DATA.posts.filter((p) => answers[p.key]).length; $("pt").textContent = DATA.posts.length;
+  $("tc").textContent = DATA.titles.filter((t) => picks[t.key]).length; $("tt").textContent = DATA.titles.length;
+}
+function render() { renderPosts(); renderTitles(); counts(); }
+
+async function save(coll, key, body, apply) {
+  apply(); render();
+  if (!db) return;
+  $("status").textContent = "Saving…";
+  try { await db.collection(coll).doc(key).set({ ...body, at: Date.now() }); $("status").textContent = "Saved"; }
+  catch (e) { $("status").textContent = "Not saved: " + (e && e.code ? e.code : "error"); }
+}
+
+render();
+(async () => {
+  const timer = setTimeout(() => { if (!db) noStore(); }, 10000);
+  db = await (window.claude?.use?.("db") ?? Promise.resolve(null));
+  clearTimeout(timer);
+  if (!db) return noStore();
+  $("status").textContent = "Answers save automatically";
+  db.collection("answers").onSnapshot((s) => { for (const d of s.docs) answers[d.id] = d.data().a; render(); }, () => noStore());
+  db.collection("titles").onSnapshot((s) => { for (const d of s.docs) picks[d.id] = d.data().pick; render(); }, () => noStore());
+})();
+function noStore() {
+  db = null;
+  $("status").textContent = "Not saving";
+  const w = $("warn"); w.hidden = false;
+  w.textContent = "Answers can't be saved in this view. Open this page on claude.ai while signed in so Claude can read your answers.";
+}
+</script>
