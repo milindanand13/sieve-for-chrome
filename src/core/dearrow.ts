@@ -5,7 +5,7 @@ const BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 2500;
 
 const VAGUE_TITLE_RE =
-  /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong)\b|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
+  /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
 
 const titleCache = new Map<string, string | null>();
 const fetchedPrefixes = new Map<string, number>();
@@ -23,8 +23,11 @@ export function cleanDeArrowTitle(raw: string): string {
   return raw.replace(/(^|\s)>(\S)/g, "$1$2").replace(/\s+/g, " ").trim();
 }
 
+// Songs and music videos ("ft.", "Official Video", lyrics) are titles, not bait; the title writer also leaves songs alone.
+const MUSIC_TITLE_RE = /\b(?:ft|feat)\.|\b(?:official (?:music )?video|official audio|lyrics?|visuali[sz]er|remix)\b/i;
+
 export function isVagueClickbaitTitle(title: string): boolean {
-  if (!title) return false;
+  if (!title || MUSIC_TITLE_RE.test(title)) return false;
   if (VAGUE_TITLE_RE.test(title)) return true;
   const letters = title.replace(/[^A-Za-z]/g, "");
   if (letters.length >= 10) {

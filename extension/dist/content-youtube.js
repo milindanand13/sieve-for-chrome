@@ -8,9 +8,10 @@
 
   // src/core/dearrow.ts
   var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
-  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong)\b|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
+  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
+  var MUSIC_TITLE_RE = /\b(?:ft|feat)\.|\b(?:official (?:music )?video|official audio|lyrics?|visuali[sz]er|remix)\b/i;
   function isVagueClickbaitTitle(title) {
-    if (!title) return false;
+    if (!title || MUSIC_TITLE_RE.test(title)) return false;
     if (VAGUE_TITLE_RE.test(title)) return true;
     const letters = title.replace(/[^A-Za-z]/g, "");
     if (letters.length >= 10) {
@@ -889,7 +890,8 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     }
     if (isYouTubeSafeRoute(window.location.href)) return;
     const cards = document.querySelectorAll(
-      `ytd-rich-item-renderer, ytd-compact-video-renderer, ${BARE_LOCKUP}`
+      CARD_SEL
+      // includes search results: the first screen is server-rendered, so the JSON path never sees it
     );
     const batch = [];
     const cardById = /* @__PURE__ */ new Map();

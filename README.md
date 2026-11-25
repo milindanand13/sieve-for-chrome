@@ -4,7 +4,13 @@ Sieve sits between YouTube, X and Instagram and your eyes. It looks at every pos
 
 By Milind Anand, built with Claude Code. Based on Teddy Warner's original Firefox extension, [Twarner491/sieve](https://github.com/Twarner491/sieve) (MIT license): the idea and the core design are his. This version runs on Chrome and adds 👍 / 👎 feedback, creator learning, grading from the page, and plain titles.
 
-![Sieve on YouTube, Twitter, Instagram, and TikTok](docs/images/sieve-example.png)
+![Sieve on a YouTube search for celebrity drama: gossip and AI-slop videos are greyed out with a "sieve:" label giving the reason, and 👍/👎 buttons sit on the left edge of the hovered card](docs/images/youtube-dimmed.png)
+
+*Gossip and AI-slop videos greyed out, each with the reason. Hover any card for 👍 / 👎.*
+
+![Sieve on a YouTube search for camera reviews: bait titles like "Don't Buy a Camera Until You Watch This!" replaced with plain ones like "Camera buying advice for 2026"](docs/images/youtube-plain-titles.png)
+
+*Bait titles rewritten to say what the video is: "Watch THIS Before You Buy A Camera In 2026" became "Camera buying advice for 2026".*
 
 ---
 

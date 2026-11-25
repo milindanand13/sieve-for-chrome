@@ -1295,7 +1295,7 @@
   var DEARROW_MIRROR_BASE = "https://dearrow.minibomba.pro/sbserver/api/branding";
   var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
   var FETCH_TIMEOUT_MS = 2500;
-  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong)\b|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
+  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
   var titleCache = /* @__PURE__ */ new Map();
   var fetchedPrefixes = /* @__PURE__ */ new Map();
   async function sha256Prefix4(input) {
@@ -1309,8 +1309,9 @@
   function cleanDeArrowTitle(raw) {
     return raw.replace(/(^|\s)>(\S)/g, "$1$2").replace(/\s+/g, " ").trim();
   }
+  var MUSIC_TITLE_RE = /\b(?:ft|feat)\.|\b(?:official (?:music )?video|official audio|lyrics?|visuali[sz]er|remix)\b/i;
   function isVagueClickbaitTitle(title) {
-    if (!title) return false;
+    if (!title || MUSIC_TITLE_RE.test(title)) return false;
     if (VAGUE_TITLE_RE.test(title)) return true;
     const letters = title.replace(/[^A-Za-z]/g, "");
     if (letters.length >= 10) {
@@ -28740,7 +28741,7 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`,
   var DESC_CHARS = 900;
   var PLAIN_TITLE_INSTRUCTIONS = `You rewrite YouTube titles that bait the viewer into ones that say what the video is actually about.
 For each item you get its title, channel, and the creator's description. Write one plain title that names the real subject and what the video covers, using only facts from the title and description. Ignore sponsor and link lines.
-Rules: at most 100 characters, no questions, no hype words, no ALL CAPS, no emoji, no "you". If the description does not say what the video covers, return the original title unchanged.
+Rules: at most 100 characters, no questions, no hype words, no ALL CAPS, no emoji, no "you". If it is a song, music video, trailer or a title that already says what the video is, or the description does not say what the video covers, return the original title unchanged.
 Return ONLY a JSON object mapping each index to its new title, like {"0":"How L.L. Bean boots are made and how the company has changed"}.`;
   function extractShortDescription(html) {
     const m = /"shortDescription":("(?:[^"\\]|\\.)*")/.exec(html);
@@ -28769,7 +28770,8 @@ Return ONLY a JSON object mapping each index to its new title, like {"0":"How L.
       const t = parsed[String(i)];
       if (typeof t !== "string") return;
       const clean = t.replace(/\s+/g, " ").trim().slice(0, 120);
-      if (clean.length >= 8 && clean.toLowerCase() !== job.title.toLowerCase()) out.set(job.id, clean);
+      const bare = (t2) => t2.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+      if (clean.length >= 8 && bare(clean) !== bare(job.title)) out.set(job.id, clean);
     });
     return out;
   }
