@@ -27,7 +27,7 @@ const OLD_DEFAULT_RUBRIC_HASHES = new Set<string>([
 ]);
 
 // Earlier defaults opened with the owner's own description; it moves to "About you" on upgrade.
-function aboutFromOldRubric(rubric: string): string {
+export function aboutFromOldRubric(rubric: string): string {
   const m = /^You filter a feed for one person: ([^.]+)\./.exec(rubric);
   if (!m?.[1]) return "";
   const who = m[1].replace(/^an? /, "").trim();
