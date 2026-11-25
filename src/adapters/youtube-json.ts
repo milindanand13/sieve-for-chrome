@@ -29,6 +29,8 @@ const AD_AND_NOISE_KEYS = new Set([
   "promotedSparklesWebRenderer",
   "promotedVideoRenderer",
   "miniGameCardViewModel",
+  // Upsell banners such as "NFL Sunday Ticket, YouTube featured".
+  "statementBannerRenderer",
   "radioRenderer",
   "compactRadioRenderer",
 ]);

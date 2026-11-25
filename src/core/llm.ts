@@ -91,15 +91,18 @@ function summarizeIndexedItem(item: FeedItem, index: number) {
     text: item.titleOrText.slice(0, 240),
     ...(item.secondaryText ? { ctx: item.secondaryText.slice(0, 180) } : {}),
     ...(item.durationSec ? { dur: item.durationSec } : {}),
+    ...(item.isFollowed ? { f: 1 } : {}),
   };
 }
 
 const VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with one letter:
-- "k" = keep (engineering, hardware, software, science, space, design, art, photography, music, demos, links, dry humor/jokes, opinions, weird rabbit holes, or normal human updates even if only a few words long)
-- "u" = unsure or neutral (kept by default when in doubt)
-- "d" = confident drop (ONLY clear ragebait, public humiliation/dunk clips, political/culture-war outrage, celebrity/influencer gossip, crypto/memecoin shills, hustle-bro/DM-funnel bait, short-drama cliffhangers, or AI voiceover sleep-slop)
+- "k" = keep: craft, engineering, science, design, art, photography, film, music (including live sets and DJ mixes), film/TV trailers and reviews, stand-up comedy, sports played or explained, demos, links, dry humor, real opinions, weird rabbit holes, or normal human updates even if only a few words long
+- "u" = unsure (kept)
+- "d" = drop: ragebait, political or culture-war outrage, dunking, public humiliation, celebrity or influencer gossip about private lives, crypto or hustle grifts, DM-funnel bait, short-drama cliffhangers, AI voiceover or AI-generated slop, viral shock clips (fights, "kalesh", accidents, dash-cam, snakes, crowds filming an incident, "watch till the end"), relationship and dating drama or "am I crazy / AITA" bait, reaction or repost aggregator accounts, and ads, upsells or promos
+"f":1 means the user follows this account: keep their own posts unless they are clearly one of the drop types.
+"Celebrity gossip" is talk about people's private lives. An "Official Trailer" or teaser that lists actor names is a trailer: keep it. Stand-up comedy and interviews about work are not gossip.
 
-Return ONLY a JSON object listing the indexes of confident drops, optional unsure indexes, and a 2-4 word label for each drop, like:
+Return ONLY a JSON object listing the indexes of drops, optional unsure indexes, and a 2-4 word label for each drop, like:
 {"drop":["2"],"unsure":["1"],"why":{"2":"outrage bait"}}
 Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`;
 

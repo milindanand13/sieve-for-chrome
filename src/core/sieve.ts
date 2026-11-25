@@ -84,7 +84,7 @@ export function evaluateLocalDecision(
     if (keys.some((k) => allowed.has(k))) return KEEP("allowed handle");
   }
 
-  if (config.passFollowed && item.isFollowed) return KEEP("followed");
+  // Followed accounts are graded too (the grader is told, and is lenient); passFollowed only skips the heuristics below.
 
   if (item.platform === "youtube" && seeds.hnVideos.has(item.id)) return KEEP("hn video");
   if (keys.some((k) => seeds.hnChannels.has(k))) return KEEP("hn channel");
@@ -101,15 +101,16 @@ export function evaluateLocalDecision(
   if (ATTENTION_TRAP_RE.test(fullText)) return DROP("hype headline");
   if (GOSSIP_DOMAIN_RE.test(fullText)) return DROP("gossip");
 
-  if (!item.isFollowed) {
+  if (!(config.passFollowed && item.isFollowed)) {
     if (item.platform === "x" && config.x.slopCadenceFilter) {
       if (isStructuralSlop(item.titleOrText, {}, 65)) return DROP("slop cadence");
     } else if (item.platform !== "youtube" && item.platform !== "x") {
       if (isStructuralSlop(item.titleOrText, {}, 74)) return DROP("slop cadence");
     }
 
-    if (config.noveltyFilter && novelty?.isRedundantRehash(item.titleOrText)) {
-      return DROP("novelty");
+    // X only: a YouTube title from the same series or a video you already watched is not a rehash.
+    if (item.platform === "x" && config.noveltyFilter && novelty?.isRedundantRehash(item.titleOrText)) {
+      return DROP("seen before");
     }
   }
 

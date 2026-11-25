@@ -251,6 +251,7 @@ function youtubeVideoId(card: HTMLElement): string {
 }
 
 installDimMarker({
+  cardSelector: "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",
   cards: () =>
     document.querySelectorAll<HTMLElement>(
       "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",

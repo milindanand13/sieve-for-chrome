@@ -6,6 +6,7 @@ import {
   matchesInterceptUrl,
   MAX_STREAM_BYTES,
   REWRITE_TIMEOUT_MS,
+  worthRewriting,
 } from "../shared/intercept.js";
 
 const pending = new Map<string, (body: string | null) => void>();
@@ -21,6 +22,7 @@ window.addEventListener("message", (event) => {
 });
 
 function rewrite(url: string, body: string): Promise<string | null> {
+  if (!worthRewriting(url, body)) return Promise.resolve(null);
   return new Promise((resolve) => {
     const id = `${Date.now()}-${++seq}`;
     const done = (v: string | null): void => {

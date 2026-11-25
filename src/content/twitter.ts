@@ -39,9 +39,14 @@ function syncBirdBranding(): void {
   }
 }
 
-async function evaluateExploreCells(): Promise<void> {
+// X now streams the home timeline outside the GraphQL calls the interceptor wraps, so feed
+// tweets are graded from the page. Profiles and threads are never filtered.
+const GRADED_PATHS = /^\/(home|explore|search)(\/|$)/;
+
+async function evaluateTimelineCells(): Promise<void> {
   if (!activeConfig?.enabled || !activeConfig.x.enabled || !activeConfig.x.caliberFilter) return;
-  if (!window.location.pathname.startsWith("/explore")) return;
+  if (!GRADED_PATHS.test(window.location.pathname)) return;
+  const onExplore = window.location.pathname.startsWith("/explore");
 
   const cells = document.querySelectorAll<HTMLElement>(
     'div[data-testid="primaryColumn"] [data-testid="cellInnerDiv"]',
@@ -50,7 +55,7 @@ async function evaluateExploreCells(): Promise<void> {
   const cellById = new Map<string, HTMLElement>();
 
   cells.forEach((cell, idx) => {
-    const trend = cell.querySelector<HTMLElement>('[data-testid="trend"]');
+    const trend = onExplore ? cell.querySelector<HTMLElement>('[data-testid="trend"]') : null;
     if (trend) {
       const text = (trend.textContent ?? "").replace(/\s+/g, " ").trim();
       if (!text || text.length < 3) return;
@@ -72,14 +77,14 @@ async function evaluateExploreCells(): Promise<void> {
       const match = /\/([^/]+)\/status\/(\d+)/.exec(statusLink?.getAttribute("href") ?? "");
       const tweetBody = tweet.querySelector('[data-testid="tweetText"]')?.textContent?.trim() ?? "";
       if (!tweetBody) return;
-      const id = match?.[2] ?? `dom_explore_tw_${idx}_${tweetBody.slice(0, 24)}`;
+      const id = match?.[2] ?? `dom_tw_${idx}_${tweetBody.slice(0, 24)}`;
       if (!rememberBounded(evaluatedDomCells, id)) return;
       cellById.set(id, cell);
       batch.push({
         platform: "x",
         id,
         creatorHandle: match?.[1],
-        surface: "search",
+        surface: onExplore || window.location.pathname.startsWith("/search") ? "search" : "home",
         titleOrText: tweetBody,
       });
     }
@@ -122,12 +127,13 @@ function polishTimelineDom(): void {
     .querySelectorAll<HTMLElement>('[data-testid="tweet"]')
     .forEach((tweetEl) => trackTweetDwell(tweetEl));
 
-  void evaluateExploreCells();
+  void evaluateTimelineCells();
 }
 
 const schedulePolish = createRafScheduler(polishTimelineDom);
 
 installDimMarker({
+  cardSelector: '[data-testid="cellInnerDiv"]',
   cards: () => document.querySelectorAll<HTMLElement>('[data-testid="cellInnerDiv"]'),
   idsOf: (cell) => {
     const href = cell

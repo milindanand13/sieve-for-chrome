@@ -2,21 +2,17 @@ import { isRecord, type SieveConfig } from "./types.js";
 
 const SCHEMA_VERSION = 1;
 
-export const DEFAULT_RUBRIC = `Evaluate each item across four axes:
-1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.
-2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.
-3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.
-4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.
+export const DEFAULT_RUBRIC = `You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.
 
-Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
+Keep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
+Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking news), hustle or crypto grifts, manufactured anxiety, and ads or promos.`;
 
-KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
-- photography
-- filmmaking and cinematography
-- media: journalism, criticism, and production
-- outdoor sports`;
+// Earlier built-in rubrics: a stored copy of one is upgraded to the current default; edited rubrics are left alone.
+const OLD_DEFAULT_RUBRICS = new Set<string>([
+  "Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks (\"wait till the end\", \"feel illegal to know\", \"comment X for link\", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.\n\nKEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:\n- photography\n- filmmaking and cinematography\n- media: journalism, criticism, and production\n- outdoor sports",
+  "Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks (\"wait till the end\", \"feel illegal to know\", \"comment X for link\", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.",
+]);
 
 export const LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
 export const LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
@@ -138,7 +134,7 @@ export function mergeConfig(stored?: unknown): SieveConfig {
       endpoint: typeof gr.endpoint === "string" ? gr.endpoint : d.grader.endpoint,
       model: typeof gr.model === "string" ? gr.model : d.grader.model,
       apiKey: typeof gr.apiKey === "string" ? gr.apiKey : d.grader.apiKey,
-      rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
+      rubric: typeof gr.rubric === "string" && !OLD_DEFAULT_RUBRICS.has(gr.rubric) ? gr.rubric : d.grader.rubric,
       streamHoldMs:
         typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs)
           ? gr.streamHoldMs

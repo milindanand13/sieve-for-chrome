@@ -33,7 +33,7 @@ describe("evaluateLocalTiers", () => {
     expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
   });
 
-  it("keeps followed creators when passFollowed is enabled", () => {
+  it("sends followed creators to the grader instead of passing them", () => {
     const item: FeedItem = {
       platform: "instagram",
       id: "ig1",
@@ -42,7 +42,7 @@ describe("evaluateLocalTiers", () => {
       surface: "reels",
       titleOrText: "glaze test #41",
     };
-    expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("keep");
+    expect(evaluateLocalTiers(item, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("uncertain");
   });
 
   it("keeps HackerTube canonical video IDs and HN-trusted channels", () => {

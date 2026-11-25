@@ -41,12 +41,14 @@ function readHeaderLabels(article: HTMLElement): string[] {
       break;
     }
     const parent = node.parentElement;
-    if (!parent || parent.closest("a, button, [role='button'], figure, blockquote")) continue;
+    if (!parent || parent.closest("button, [role='button'], figure, blockquote")) continue;
     const clean = (node.nodeValue ?? "")
       .replace(ZERO_WIDTH_RE, "")
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
+    // Instagram renders "Ad" as a link, so links count, but only for the exact label words.
+    if (parent.closest("a") && !SPONSORED_LABELS.has(clean) && !SUGGESTED_LABELS.has(clean)) continue;
     if (clean && clean.length <= 36) labels.push(clean);
   }
   return labels;
@@ -104,14 +106,13 @@ function calmRenderedCaptions(root: ParentNode): void {
     });
 }
 
-async function evaluateUnfollowedHomeArticles(main: HTMLElement): Promise<void> {
+async function evaluateHomeArticles(main: HTMLElement): Promise<void> {
   if (!activeConfig?.instagram.caliberFilter) return;
   const batch: FeedItem[] = [];
   const articleById = new Map<string, HTMLElement>();
 
   main.querySelectorAll<HTMLElement>("article:not([data-sieve-hidden])").forEach((article, idx) => {
     if (article.parentElement?.closest("article")) return;
-    if (!hasUnfollowedHeaderButton(article)) return;
 
     const postLink = article.querySelector<HTMLAnchorElement>('a[href^="/p/"], a[href^="/reel/"]');
     const href = postLink?.getAttribute("href") ?? "";
@@ -127,7 +128,8 @@ async function evaluateUnfollowedHomeArticles(main: HTMLElement): Promise<void> 
       platform: "instagram",
       id,
       creatorHandle: handle,
-      isFollowed: false,
+      // Followed posts are graded too; the grader is told and keeps their own posts.
+      isFollowed: !hasUnfollowedHeaderButton(article),
       surface: "timeline",
       titleOrText: text,
     });
@@ -181,7 +183,7 @@ function sweepInstagramDom(): void {
     }
   });
 
-  void evaluateUnfollowedHomeArticles(main);
+  void evaluateHomeArticles(main);
 }
 
 const scheduleSweep = createRafScheduler(sweepInstagramDom);
@@ -194,6 +196,7 @@ function instagramPostRefs(article: HTMLElement): string[] {
 }
 
 installDimMarker({
+  cardSelector: "main article",
   cards: () => document.querySelectorAll<HTMLElement>("main article"),
   idsOf: instagramPostRefs,
 });

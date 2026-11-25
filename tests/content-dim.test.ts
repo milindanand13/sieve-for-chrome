@@ -24,8 +24,13 @@ beforeAll(async () => {
     requestAnimationFrame: (cb: () => void) => cb(),
     MutationObserver: class { observe() {} },
     localStorage: { getItem: () => null, setItem: () => {} },
+    addEventListener: () => {},
     document: {
-      documentElement: { dataset: {} },
+      documentElement: { dataset: {}, append: () => {} },
+      createElement: () => ({
+        style: {},
+        attachShadow: () => ({ innerHTML: "", querySelector: () => ({ style: {} }), querySelectorAll: () => [] }),
+      }),
       addEventListener: (t: string, fn: (ev: unknown) => void) => (docListeners[t] = fn),
     },
     chrome: {
@@ -39,6 +44,7 @@ beforeAll(async () => {
   });
   shared = await import("../src/content/shared.js");
   shared.installDimMarker({
+    cardSelector: "article",
     cards: () => cards as never,
     idsOf: (c) => [(c as unknown as Card).id],
   });

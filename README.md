@@ -59,14 +59,15 @@ Or switch **mode** to `api` in **Settings** to use any OpenAI-compatible chat co
 ## 5. Using It
 
 - **Removed outright:** ads, Shorts, mixes, promoted items, and suggested items.
+- **Graded:** every feed item, including accounts you follow (the grader is told and keeps their own posts unless they are clear slop). X and Instagram posts are graded from the page, because neither sends its whole feed through a request Sieve can rewrite.
 - **Dimmed:** low-quality items stay in place with a small `sieve: <reason>` label. You can still click them.
 - **Hide dropped:** turn on this switch in **Settings** to remove dimmed items instead of dimming them.
-- **Feedback:** right-click any feed card and open the **Sieve** menu:
+- **Feedback:** hover any video, post or tweet and click 👍 (keep posts like this) or 👎 (slop, dim it) on its left edge. Or right-click the card and open the **Sieve** menu:
   - Not slop, keep this
   - Slop, dim this
   - Always keep this creator
   - Always dim this creator
-- After each right-click, the Sieve toolbar icon shows ✓ (saved) or ! (not saved; hover the icon to see why).
+- After a 👍/👎 click the button shows ✓ (saved) or ! (not saved). After a right-click, the Sieve toolbar icon shows the same.
 - Your corrections stick and beat every rule. Sieve keeps all of them (up to 500) and shows the grader the 30 most like the posts it is judging, so it gets better the more you correct. Two keeps or three dims on the same creator teach it that creator.
 - **Popup:** shows counts per site and a drop log.
 

@@ -34,6 +34,10 @@
   function matchesInterceptUrl(url) {
     return INTERCEPT_RES.some((re) => re.test(url));
   }
+  function worthRewriting(url, body) {
+    if (!url.includes("instagram.com/graphql/query")) return true;
+    return body.includes("feed__timeline") || body.includes("clips__home");
+  }
 
   // src/content/intercept.ts
   var pending = /* @__PURE__ */ new Map();
@@ -47,6 +51,7 @@
     pending.get(m.id)?.(typeof m.body === "string" ? m.body : null);
   });
   function rewrite(url, body) {
+    if (!worthRewriting(url, body)) return Promise.resolve(null);
     return new Promise((resolve) => {
       const id = `${Date.now()}-${++seq}`;
       const done = (v) => {

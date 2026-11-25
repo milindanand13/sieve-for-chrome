@@ -72,6 +72,14 @@ async function initConfigAndSeeds(): Promise<void> {
   try {
     const stored = await chrome.storage.local.get("sieveConfig");
     config = mergeConfig(stored.sieveConfig);
+    const sr: unknown = stored.sieveConfig;
+    const storedRubric = isRecord(sr) && isRecord(sr.grader) ? sr.grader.rubric : undefined;
+    if (typeof storedRubric === "string" && storedRubric !== config.grader.rubric) {
+      // An old built-in rubric was upgraded: verdicts graded under it go, your own calls stay.
+      await memory.ready;
+      await memory.clear({ keepUser: true });
+      await chrome.storage.local.set({ sieveConfig: config });
+    }
     feedback = parseFeedback((await chrome.storage.local.get(FEEDBACK_KEY))[FEEDBACK_KEY]);
   } catch {
     config = structuredClone(DEFAULT_CONFIG);

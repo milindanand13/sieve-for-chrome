@@ -72,6 +72,8 @@ const dimReasons = new Map<string, string>();
 const DIM_CAP = 1500;
 
 export interface DimSite {
+  /** CSS selector matching one feed card (used for hover lookups). */
+  cardSelector: string;
   cards: () => Iterable<HTMLElement>;
   /** Every identifier the card exposes (video id, status id, shortcode, href). */
   idsOf: (card: HTMLElement) => string[];
@@ -140,6 +142,122 @@ export function installDimMarker(site: DimSite): void {
   else document.addEventListener("DOMContentLoaded", observe, { once: true });
 }
 
+/** Saves a keep/dim call for one card and applies it to every card showing that post. */
+async function sendFeedback(action: string, card: HTMLElement, ids: string[], text: string): Promise<unknown> {
+  const keep = action === "keep" || action === "keepCreator";
+  let res: unknown;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text });
+  } catch {
+    return { ok: false, error: "Sieve was reloaded, refresh this page" };
+  }
+  if (!isRecord(res) || res.ok !== true || !dimSite) return res ?? { ok: false, error: "no reply from Sieve" };
+  // By id, not element: the clicked element may now show a different post.
+  const site = dimSite;
+  const targets = ids.length ? [...site.cards()].filter((c) => site.idsOf(c).some((id) => ids.includes(id))) : [card];
+  if (keep) {
+    ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
+    targets.forEach((c) => (unmarkCard(c), delete c.dataset.sieveDimDirect));
+  } else {
+    ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
+    targets.forEach((c) => markCard(c, "you: slop"));
+  }
+  return res;
+}
+
+/**
+ * Thumbs up / down on the card under the pointer. One fixed element outside the page's own
+ * tree (in a shadow root), so React feeds are never touched and site CSS cannot reach it.
+ */
+function installFeedbackButtons(): void {
+  const host = document.createElement("sieve-feedback");
+  host.style.cssText = "position:fixed;top:0;left:0;z-index:2147483647;pointer-events:none;";
+  const root = host.attachShadow({ mode: "closed" });
+  root.innerHTML = `<style>
+    .pill{position:fixed;display:none;flex-direction:column;gap:4px;padding:4px;border-radius:999px;
+      background:rgba(20,20,20,.82);pointer-events:auto;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+    button{all:unset;cursor:pointer;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+      font-size:15px;line-height:1}
+    button:hover,button:focus-visible{background:rgba(255,255,255,.18);outline:none}
+    button[aria-pressed="true"]{background:rgba(255,255,255,.32)}
+    .msg{font:11px/1.2 ui-monospace,monospace;color:#fff;text-align:center;min-height:0}
+  </style><div class="pill" role="group" aria-label="Sieve feedback">
+    <button data-a="keep" aria-label="Sieve: good, keep posts like this" title="Good, keep posts like this">👍</button>
+    <button data-a="drop" aria-label="Sieve: slop, dim posts like this" title="Slop, dim posts like this">👎</button>
+    <div class="msg" aria-live="polite"></div></div>`;
+  const pill = root.querySelector<HTMLElement>(".pill")!;
+  const msg = root.querySelector<HTMLElement>(".msg")!;
+  const buttons = [...root.querySelectorAll<HTMLButtonElement>("button")];
+  let current: HTMLElement | undefined;
+
+  const place = (): void => {
+    if (!current || !current.isConnected) return hide();
+    const r = current.getBoundingClientRect();
+    const top = Math.max(r.top, 0);
+    const bottom = Math.min(r.bottom, innerHeight);
+    if (bottom - top < 70 || r.width < 120) return hide();
+    pill.style.left = `${r.left + 6}px`;
+    pill.style.top = `${(top + bottom) / 2 - pill.offsetHeight / 2}px`;
+  };
+  const show = (card: HTMLElement): void => {
+    if (card !== current) {
+      current = card;
+      msg.textContent = "";
+      const dimmed = card.dataset.sieveDim === "1";
+      buttons[0]!.setAttribute("aria-pressed", "false");
+      buttons[1]!.setAttribute("aria-pressed", String(dimmed));
+    }
+    pill.style.display = "flex";
+    place();
+  };
+  function hide(): void {
+    current = undefined;
+    pill.style.display = "none";
+  }
+
+  document.addEventListener(
+    "mouseover",
+    (ev) => {
+      if (!dimSite || document.documentElement?.dataset.sieveActive !== "1") return hide();
+      if (ev.composedPath().includes(host)) return;
+      const card = ev.target instanceof Element ? ev.target.closest<HTMLElement>(dimSite.cardSelector) : null;
+      if (card) return dimSite.idsOf(card).some(Boolean) ? show(card) : hide();
+      // YouTube's hover preview covers the thumbnail but sits outside the card.
+      const r = current?.getBoundingClientRect();
+      if (r && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) return;
+      hide();
+    },
+    { capture: true, passive: true },
+  );
+  addEventListener("scroll", () => place(), { capture: true, passive: true });
+
+  for (const btn of buttons) {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const card = current;
+      if (!card || !dimSite) return;
+      const action = btn.dataset.a!;
+      const ids = dimSite.idsOf(card).filter(Boolean);
+      if (ids.length === 0) {
+        msg.textContent = "!";
+        btn.title = "Sieve could not read this post's id";
+        return;
+      }
+      void sendFeedback(action, card, ids, (card.innerText || "").slice(0, 300)).then((res) => {
+        const ok = isRecord(res) && res.ok === true;
+        msg.textContent = ok ? "✓" : "!";
+        if (!ok) msg.title = isRecord(res) && typeof res.error === "string" ? res.error : "not saved";
+        buttons[0]!.setAttribute("aria-pressed", String(ok && action === "keep"));
+        buttons[1]!.setAttribute("aria-pressed", String(ok && action === "drop"));
+      });
+    });
+  }
+  const mount = (): void => void document.documentElement.append(host);
+  if (document.documentElement) mount();
+  else document.addEventListener("DOMContentLoaded", mount, { once: true });
+}
+
 export function bootSiteAdapter(
   onConfig: (config: SieveConfig) => void,
   isOn: (config: SieveConfig) => boolean,
@@ -173,32 +291,14 @@ export function bootSiteAdapter(
   chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
     const action = msg.action;
-    const card = lastCard;
-    if (!card || !dimSite || typeof action !== "string") {
+    if (!lastCard || !dimSite || typeof action !== "string") {
       sendResponse({ ok: false, error: "no post under the click" });
       return;
     }
-    const ids = lastIds;
-    const keep = action === "keep" || action === "keepCreator";
-    void chrome.runtime
-      .sendMessage({ type: "USER_FEEDBACK", action, ids, text: lastText })
-      .then((res: unknown) => {
-        sendResponse(res ?? { ok: false, error: "no reply from Sieve" });
-        if (!isRecord(res) || res.ok !== true || !dimSite) return;
-        // By id, not element: the clicked element may now show a different post.
-        const site = dimSite;
-        const targets = ids.length ? [...site.cards()].filter((c) => site.idsOf(c).some((id) => ids.includes(id))) : [card];
-        if (keep) {
-          ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
-          targets.forEach((c) => (unmarkCard(c), delete c.dataset.sieveDimDirect));
-        } else {
-          ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
-          targets.forEach((c) => markCard(c, "you: slop"));
-        }
-      })
-      .catch(() => sendResponse({ ok: false, error: "no reply from Sieve" }));
+    void sendFeedback(action, lastCard, lastIds, lastText).then(sendResponse);
     return true; // reply after the background answers
   });
+  installFeedbackButtons();
   const baseOnConfig = onConfig;
   onConfig = (cfg) => {
     if (document.documentElement) {

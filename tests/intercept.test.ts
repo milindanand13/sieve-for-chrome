@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rewriteResponseBody } from "../src/background/rewrite.js";
 import { DEFAULT_CONFIG } from "../src/defaults.js";
-import { matchesInterceptUrl } from "../src/shared/intercept.js";
+import { matchesInterceptUrl, worthRewriting } from "../src/shared/intercept.js";
 
 describe("intercept url list", () => {
   it("matches feed endpoints and ignores everything else", () => {
@@ -31,5 +31,14 @@ describe("rewriteResponseBody", () => {
   it("returns re-serialized JSON for a filtered endpoint", async () => {
     const out = await rewriteResponseBody(url, "https://x.com/home", "{}", DEFAULT_CONFIG, decide);
     expect(out).toEqual({ body: "{}", dimmed: [], hard: [] });
+  });
+});
+
+describe("worthRewriting", () => {
+  it("sends only Instagram feed responses to the worker", () => {
+    const ig = "https://www.instagram.com/graphql/query";
+    expect(worthRewriting(ig, '{"data":{"xdt_api__v1__feed__timeline__connection":{}}}')).toBe(true);
+    expect(worthRewriting(ig, '{"data":{"xdt_api__v1__likes":{}}}')).toBe(false);
+    expect(worthRewriting("https://x.com/i/api/graphql/abc/HomeTimeline", "{}")).toBe(true);
   });
 });

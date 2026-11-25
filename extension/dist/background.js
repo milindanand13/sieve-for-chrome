@@ -175,15 +175,18 @@
       by: item.creatorHandle || item.creatorId || "",
       text: item.titleOrText.slice(0, 240),
       ...item.secondaryText ? { ctx: item.secondaryText.slice(0, 180) } : {},
-      ...item.durationSec ? { dur: item.durationSec } : {}
+      ...item.durationSec ? { dur: item.durationSec } : {},
+      ...item.isFollowed ? { f: 1 } : {}
     };
   }
   var VERDICT_OUTPUT_INSTRUCTIONS = `Label each item index "0", "1", ... with one letter:
-- "k" = keep (engineering, hardware, software, science, space, design, art, photography, music, demos, links, dry humor/jokes, opinions, weird rabbit holes, or normal human updates even if only a few words long)
-- "u" = unsure or neutral (kept by default when in doubt)
-- "d" = confident drop (ONLY clear ragebait, public humiliation/dunk clips, political/culture-war outrage, celebrity/influencer gossip, crypto/memecoin shills, hustle-bro/DM-funnel bait, short-drama cliffhangers, or AI voiceover sleep-slop)
+- "k" = keep: craft, engineering, science, design, art, photography, film, music (including live sets and DJ mixes), film/TV trailers and reviews, stand-up comedy, sports played or explained, demos, links, dry humor, real opinions, weird rabbit holes, or normal human updates even if only a few words long
+- "u" = unsure (kept)
+- "d" = drop: ragebait, political or culture-war outrage, dunking, public humiliation, celebrity or influencer gossip about private lives, crypto or hustle grifts, DM-funnel bait, short-drama cliffhangers, AI voiceover or AI-generated slop, viral shock clips (fights, "kalesh", accidents, dash-cam, snakes, crowds filming an incident, "watch till the end"), relationship and dating drama or "am I crazy / AITA" bait, reaction or repost aggregator accounts, and ads, upsells or promos
+"f":1 means the user follows this account: keep their own posts unless they are clearly one of the drop types.
+"Celebrity gossip" is talk about people's private lives. An "Official Trailer" or teaser that lists actor names is a trailer: keep it. Stand-up comedy and interviews about work are not gossip.
 
-Return ONLY a JSON object listing the indexes of confident drops, optional unsure indexes, and a 2-4 word label for each drop, like:
+Return ONLY a JSON object listing the indexes of drops, optional unsure indexes, and a 2-4 word label for each drop, like:
 {"drop":["2"],"unsure":["1"],"why":{"2":"outrage bait"}}
 Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`;
   function readFirstChoiceContent(body) {
@@ -279,21 +282,15 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
 
   // src/defaults.ts
   var SCHEMA_VERSION = 1;
-  var DEFAULT_RUBRIC = `Evaluate each item across four axes:
-1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.
-2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.
-3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.
-4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.
+  var DEFAULT_RUBRIC = `You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.
 
-Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
+Keep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
-
-KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
-- photography
-- filmmaking and cinematography
-- media: journalism, criticism, and production
-- outdoor sports`;
+Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking news), hustle or crypto grifts, manufactured anxiety, and ads or promos.`;
+  var OLD_DEFAULT_RUBRICS = /* @__PURE__ */ new Set([
+    'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.\n\nKEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:\n- photography\n- filmmaking and cinematography\n- media: journalism, criticism, and production\n- outdoor sports',
+    'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.'
+  ]);
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
   var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
@@ -404,7 +401,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         endpoint: typeof gr.endpoint === "string" ? gr.endpoint : d.grader.endpoint,
         model: typeof gr.model === "string" ? gr.model : d.grader.model,
         apiKey: typeof gr.apiKey === "string" ? gr.apiKey : d.grader.apiKey,
-        rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
+        rubric: typeof gr.rubric === "string" && !OLD_DEFAULT_RUBRICS.has(gr.rubric) ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
       display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
@@ -842,7 +839,6 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
       const allowed = new Set(config2.allowHandles.map((h) => normalizeHandle(h)).filter(Boolean));
       if (keys.some((k) => allowed.has(k))) return KEEP("allowed handle");
     }
-    if (config2.passFollowed && item.isFollowed) return KEEP("followed");
     if (item.platform === "youtube" && seeds2.hnVideos.has(item.id)) return KEEP("hn video");
     if (keys.some((k) => seeds2.hnChannels.has(k))) return KEEP("hn channel");
     const ytIds = item.linkedYoutubeIds ?? extractYouTubeIdsFromText(item.titleOrText);
@@ -854,14 +850,14 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (SHORT_DRAMA_RE.test(fullText)) return DROP("short drama");
     if (ATTENTION_TRAP_RE.test(fullText)) return DROP("hype headline");
     if (GOSSIP_DOMAIN_RE.test(fullText)) return DROP("gossip");
-    if (!item.isFollowed) {
+    if (!(config2.passFollowed && item.isFollowed)) {
       if (item.platform === "x" && config2.x.slopCadenceFilter) {
         if (isStructuralSlop(item.titleOrText, {}, 65)) return DROP("slop cadence");
       } else if (item.platform !== "youtube" && item.platform !== "x") {
         if (isStructuralSlop(item.titleOrText, {}, 74)) return DROP("slop cadence");
       }
-      if (config2.noveltyFilter && novelty2?.isRedundantRehash(item.titleOrText)) {
-        return DROP("novelty");
+      if (item.platform === "x" && config2.noveltyFilter && novelty2?.isRedundantRehash(item.titleOrText)) {
+        return DROP("seen before");
       }
     }
     const cachedVerdict = memory2.getItemVerdict(item.platform, item.id);
@@ -2036,6 +2032,8 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     "promotedSparklesWebRenderer",
     "promotedVideoRenderer",
     "miniGameCardViewModel",
+    // Upsell banners such as "NFL Sunday Ticket, YouTube featured".
+    "statementBannerRenderer",
     "radioRenderer",
     "compactRadioRenderer"
   ]);
@@ -2593,6 +2591,13 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     try {
       const stored = await chrome.storage.local.get("sieveConfig");
       config = mergeConfig(stored.sieveConfig);
+      const sr = stored.sieveConfig;
+      const storedRubric = isRecord(sr) && isRecord(sr.grader) ? sr.grader.rubric : void 0;
+      if (typeof storedRubric === "string" && storedRubric !== config.grader.rubric) {
+        await memory.ready;
+        await memory.clear({ keepUser: true });
+        await chrome.storage.local.set({ sieveConfig: config });
+      }
       feedback = parseFeedback((await chrome.storage.local.get(FEEDBACK_KEY))[FEEDBACK_KEY]);
     } catch {
       config = structuredClone(DEFAULT_CONFIG);

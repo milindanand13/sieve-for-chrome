@@ -270,21 +270,15 @@
 
   // src/defaults.ts
   var SCHEMA_VERSION = 1;
-  var DEFAULT_RUBRIC = `Evaluate each item across four axes:
-1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.
-2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.
-3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.
-4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.
+  var DEFAULT_RUBRIC = `You filter a feed for one person: a person who loves craft and curiosity. The point is taste, not safety: hide what a thoughtful person would regret scrolling past, keep what they would be glad they saw.
 
-Keep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.
+Keep: genuine human craft, curiosity, engineering, hardware, software, science, design, art, photography, filmmaking and cinematography, media studies, journalism and criticism, music and live sets, film and TV trailers, stand-up comedy, outdoor sports, timely primary news, and earnest humor, even from tiny unknown creators.
 
-Drop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.
-
-KEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:
-- photography
-- filmmaking and cinematography
-- media: journalism, criticism, and production
-- outdoor sports`;
+Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical dunking, celebrity or reality-TV gossip, viral shock and "kalesh" clips (fights, accidents, crowds filming an incident), relationship and dating drama posted for reactions, "am I crazy / AITA" bait, short-drama cliffhangers, AI-generated narration or visuals, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking news), hustle or crypto grifts, manufactured anxiety, and ads or promos.`;
+  var OLD_DEFAULT_RUBRICS = /* @__PURE__ */ new Set([
+    'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.\n\nKEEP section. Never drop these topics, even when they are niche, long-form, slow, or from tiny creators:\n- photography\n- filmmaking and cinematography\n- media: journalism, criticism, and production\n- outdoor sports',
+    'Evaluate each item across four axes:\n1. Specificity: concrete builds, demos, facts, or craft vs vague hype or mystery bait.\n2. Authenticity: genuine human voice or primary source vs engagement farming or bot cadence.\n3. Substance: real signal, art, humor, or insight vs padded filler or recycled sludge.\n4. Freshness: timely updates, strange rabbit holes, or original work vs rehashed outrage.\n\nKeep items that show genuine human craft, curiosity, engineering, hardware, software, science, design, art, cinematography, music, timely primary news, or earnest humor, even from tiny unknown creators.\n\nDrop items that fail Authenticity or Substance: ragebait, political or culture-war fights, cynical dunking, celebrity or reality-TV gossip, episodic short-drama cliffhangers, AI-generated narration or visual slop, engagement hooks ("wait till the end", "feel illegal to know", "comment X for link", siren-emoji fake breaking hype), hustle or crypto grifts, and manufactured anxiety. When uncertain, keep.'
+  ]);
   var LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1/chat/completions";
   var LOCAL_DEFAULT_MODEL = "qwen3.5:4b";
   var DEFAULT_CONFIG = {
@@ -395,7 +389,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
         endpoint: typeof gr.endpoint === "string" ? gr.endpoint : d.grader.endpoint,
         model: typeof gr.model === "string" ? gr.model : d.grader.model,
         apiKey: typeof gr.apiKey === "string" ? gr.apiKey : d.grader.apiKey,
-        rubric: typeof gr.rubric === "string" ? gr.rubric : d.grader.rubric,
+        rubric: typeof gr.rubric === "string" && !OLD_DEFAULT_RUBRICS.has(gr.rubric) ? gr.rubric : d.grader.rubric,
         streamHoldMs: typeof gr.streamHoldMs === "number" && Number.isFinite(gr.streamHoldMs) ? gr.streamHoldMs : d.grader.streamHoldMs
       },
       display: { hideDropped: bool(disp, "hideDropped", d.display.hideDropped) },
@@ -541,6 +535,110 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     if (document.documentElement) observe();
     else document.addEventListener("DOMContentLoaded", observe, { once: true });
   }
+  async function sendFeedback(action, card, ids, text) {
+    const keep = action === "keep" || action === "keepCreator";
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text });
+    } catch {
+      return { ok: false, error: "Sieve was reloaded, refresh this page" };
+    }
+    if (!isRecord(res) || res.ok !== true || !dimSite) return res ?? { ok: false, error: "no reply from Sieve" };
+    const site = dimSite;
+    const targets = ids.length ? [...site.cards()].filter((c) => site.idsOf(c).some((id) => ids.includes(id))) : [card];
+    if (keep) {
+      ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
+      targets.forEach((c) => (unmarkCard(c), delete c.dataset.sieveDimDirect));
+    } else {
+      ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
+      targets.forEach((c) => markCard(c, "you: slop"));
+    }
+    return res;
+  }
+  function installFeedbackButtons() {
+    const host = document.createElement("sieve-feedback");
+    host.style.cssText = "position:fixed;top:0;left:0;z-index:2147483647;pointer-events:none;";
+    const root = host.attachShadow({ mode: "closed" });
+    root.innerHTML = `<style>
+    .pill{position:fixed;display:none;flex-direction:column;gap:4px;padding:4px;border-radius:999px;
+      background:rgba(20,20,20,.82);pointer-events:auto;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+    button{all:unset;cursor:pointer;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+      font-size:15px;line-height:1}
+    button:hover,button:focus-visible{background:rgba(255,255,255,.18);outline:none}
+    button[aria-pressed="true"]{background:rgba(255,255,255,.32)}
+    .msg{font:11px/1.2 ui-monospace,monospace;color:#fff;text-align:center;min-height:0}
+  </style><div class="pill" role="group" aria-label="Sieve feedback">
+    <button data-a="keep" aria-label="Sieve: good, keep posts like this" title="Good, keep posts like this">\u{1F44D}</button>
+    <button data-a="drop" aria-label="Sieve: slop, dim posts like this" title="Slop, dim posts like this">\u{1F44E}</button>
+    <div class="msg" aria-live="polite"></div></div>`;
+    const pill = root.querySelector(".pill");
+    const msg = root.querySelector(".msg");
+    const buttons = [...root.querySelectorAll("button")];
+    let current;
+    const place = () => {
+      if (!current || !current.isConnected) return hide();
+      const r = current.getBoundingClientRect();
+      const top = Math.max(r.top, 0);
+      const bottom = Math.min(r.bottom, innerHeight);
+      if (bottom - top < 70 || r.width < 120) return hide();
+      pill.style.left = `${r.left + 6}px`;
+      pill.style.top = `${(top + bottom) / 2 - pill.offsetHeight / 2}px`;
+    };
+    const show = (card) => {
+      if (card !== current) {
+        current = card;
+        msg.textContent = "";
+        const dimmed = card.dataset.sieveDim === "1";
+        buttons[0].setAttribute("aria-pressed", "false");
+        buttons[1].setAttribute("aria-pressed", String(dimmed));
+      }
+      pill.style.display = "flex";
+      place();
+    };
+    function hide() {
+      current = void 0;
+      pill.style.display = "none";
+    }
+    document.addEventListener(
+      "mouseover",
+      (ev) => {
+        if (!dimSite || document.documentElement?.dataset.sieveActive !== "1") return hide();
+        if (ev.composedPath().includes(host)) return;
+        const card = ev.target instanceof Element ? ev.target.closest(dimSite.cardSelector) : null;
+        if (card) return dimSite.idsOf(card).some(Boolean) ? show(card) : hide();
+        const r = current?.getBoundingClientRect();
+        if (r && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) return;
+        hide();
+      },
+      { capture: true, passive: true }
+    );
+    addEventListener("scroll", () => place(), { capture: true, passive: true });
+    for (const btn of buttons) {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const card = current;
+        if (!card || !dimSite) return;
+        const action = btn.dataset.a;
+        const ids = dimSite.idsOf(card).filter(Boolean);
+        if (ids.length === 0) {
+          msg.textContent = "!";
+          btn.title = "Sieve could not read this post's id";
+          return;
+        }
+        void sendFeedback(action, card, ids, (card.innerText || "").slice(0, 300)).then((res) => {
+          const ok = isRecord(res) && res.ok === true;
+          msg.textContent = ok ? "\u2713" : "!";
+          if (!ok) msg.title = isRecord(res) && typeof res.error === "string" ? res.error : "not saved";
+          buttons[0].setAttribute("aria-pressed", String(ok && action === "keep"));
+          buttons[1].setAttribute("aria-pressed", String(ok && action === "drop"));
+        });
+      });
+    }
+    const mount = () => void document.documentElement.append(host);
+    if (document.documentElement) mount();
+    else document.addEventListener("DOMContentLoaded", mount, { once: true });
+  }
   function bootSiteAdapter(onConfig, isOn) {
     installInterceptRelay();
     chrome.runtime.onMessage.addListener((msg, sender) => {
@@ -567,28 +665,14 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id || !isRecord(msg) || msg.type !== "FEEDBACK") return;
       const action = msg.action;
-      const card = lastCard;
-      if (!card || !dimSite || typeof action !== "string") {
+      if (!lastCard || !dimSite || typeof action !== "string") {
         sendResponse({ ok: false, error: "no post under the click" });
         return;
       }
-      const ids = lastIds;
-      const keep = action === "keep" || action === "keepCreator";
-      void chrome.runtime.sendMessage({ type: "USER_FEEDBACK", action, ids, text: lastText }).then((res) => {
-        sendResponse(res ?? { ok: false, error: "no reply from Sieve" });
-        if (!isRecord(res) || res.ok !== true || !dimSite) return;
-        const site = dimSite;
-        const targets = ids.length ? [...site.cards()].filter((c) => site.idsOf(c).some((id) => ids.includes(id))) : [card];
-        if (keep) {
-          ids.forEach((id) => (dimReasons.delete(id), keptIds.add(id)));
-          targets.forEach((c) => (unmarkCard(c), delete c.dataset.sieveDimDirect));
-        } else {
-          ids.forEach((id) => (keptIds.delete(id), rememberDim(id, "you: slop")));
-          targets.forEach((c) => markCard(c, "you: slop"));
-        }
-      }).catch(() => sendResponse({ ok: false, error: "no reply from Sieve" }));
+      void sendFeedback(action, lastCard, lastIds, lastText).then(sendResponse);
       return true;
     });
+    installFeedbackButtons();
     const baseOnConfig = onConfig;
     onConfig = (cfg) => {
       if (document.documentElement) {
@@ -903,6 +987,7 @@ KEEP section. Never drop these topics, even when they are niche, long-form, slow
     }
   }
   installDimMarker({
+    cardSelector: "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",
     cards: () => document.querySelectorAll(
       "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
     ),

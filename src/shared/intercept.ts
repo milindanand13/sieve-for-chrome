@@ -39,3 +39,12 @@ const INTERCEPT_RES = INTERCEPT_URLS.map(
 export function matchesInterceptUrl(url: string): boolean {
   return INTERCEPT_RES.some((re) => re.test(url));
 }
+
+/**
+ * Instagram sends nearly every call (likes, comments, stories) to /graphql/query. Only feed
+ * responses are worth the round trip to the worker; the rest pass through untouched.
+ */
+export function worthRewriting(url: string, body: string): boolean {
+  if (!url.includes("instagram.com/graphql/query")) return true;
+  return body.includes("feed__timeline") || body.includes("clips__home");
+}

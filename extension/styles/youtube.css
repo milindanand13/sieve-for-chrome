@@ -1,3 +1,10 @@
+/* Upsell banners and paid-channel shelves (NFL Sunday Ticket, YouTube TV). The first screen is server-rendered, so CSS. */
+html[data-sieve-yt-on="1"] ytd-rich-section-renderer:has(ytd-statement-banner-renderer),
+html[data-sieve-yt-on="1"] ytd-rich-section-renderer:has(a[href*="tv.youtube.com"]),
+html[data-sieve-yt-on="1"] ytd-rich-section-renderer:has(a[href*="sundayticket"]) {
+  display: none !important;
+}
+
 html[data-sieve-yt-shorts="1"] ytd-rich-shelf-renderer[is-shorts],
 html[data-sieve-yt-shorts="1"] ytd-rich-shelf-renderer[is-shorts=""],
 html[data-sieve-yt-shorts="1"] ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
