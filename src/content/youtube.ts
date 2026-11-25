@@ -128,7 +128,7 @@ async function evaluateUnfilteredDomCards(): Promise<void> {
   if (isYouTubeSafeRoute(window.location.href)) return;
 
   const cards = document.querySelectorAll<HTMLElement>(
-    `ytd-rich-item-renderer, ytd-compact-video-renderer, ${BARE_LOCKUP}`,
+    CARD_SEL, // includes search results: the first screen is server-rendered, so the JSON path never sees it
   );
   const batch: FeedItem[] = [];
   const cardById = new Map<string, HTMLElement>();

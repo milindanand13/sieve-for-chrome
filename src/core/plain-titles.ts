@@ -7,7 +7,7 @@ const DESC_CHARS = 900;
 
 const PLAIN_TITLE_INSTRUCTIONS = `You rewrite YouTube titles that bait the viewer into ones that say what the video is actually about.
 For each item you get its title, channel, and the creator's description. Write one plain title that names the real subject and what the video covers, using only facts from the title and description. Ignore sponsor and link lines.
-Rules: at most 100 characters, no questions, no hype words, no ALL CAPS, no emoji, no "you". If the description does not say what the video covers, return the original title unchanged.
+Rules: at most 100 characters, no questions, no hype words, no ALL CAPS, no emoji, no "you". If it is a song, music video, trailer or a title that already says what the video is, or the description does not say what the video covers, return the original title unchanged.
 Return ONLY a JSON object mapping each index to its new title, like {"0":"How L.L. Bean boots are made and how the company has changed"}.`;
 
 /** The creator's description from a watch page, or "" when the page has none. */
@@ -50,7 +50,8 @@ export async function writePlainTitles(
     const t = parsed[String(i)];
     if (typeof t !== "string") return;
     const clean = t.replace(/\s+/g, " ").trim().slice(0, 120);
-    if (clean.length >= 8 && clean.toLowerCase() !== job.title.toLowerCase()) out.set(job.id, clean);
+    const bare = (t: string): string => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    if (clean.length >= 8 && bare(clean) !== bare(job.title)) out.set(job.id, clean);
   });
   return out;
 }
