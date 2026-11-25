@@ -17,7 +17,7 @@ interface PlatformCardSpec {
 
 const UNIVERSAL_SWITCHES: SwitchSpec[] = [
   {
-    label: "pass followed creators",
+    label: "skip pattern checks for followed creators",
     get: (c) => c.passFollowed,
     set: (c, v) => {
       c.passFollowed = v;

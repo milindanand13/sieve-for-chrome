@@ -4,20 +4,48 @@ Sieve sits between YouTube, X and Instagram and your eyes. It looks at every pos
 
 By Milind Anand, built with Claude Code. Based on Teddy Warner's original Firefox extension, [Twarner491/sieve](https://github.com/Twarner491/sieve) (MIT license): the idea and the core design are his. This version runs on Chrome and adds 👍 / 👎 feedback, creator learning, grading from the page, and plain titles.
 
-![Sieve on a YouTube search for celebrity drama: gossip and AI-slop videos are greyed out with a "sieve:" label giving the reason, and 👍/👎 buttons sit on the left edge of the hovered card](docs/images/youtube-dimmed.png)
+## Before and after
 
-*Gossip and AI-slop videos greyed out, each with the reason. Hover any card for 👍 / 👎.*
+Same YouTube search, "celebrity drama exposed", in a fresh browser with no account.
 
-![Sieve on a YouTube search for camera reviews: bait titles like "Don't Buy a Camera Until You Watch This!" replaced with plain ones like "Camera buying advice for 2026"](docs/images/youtube-plain-titles.png)
+| Without Sieve | With Sieve: dimmed |
+|---|---|
+| ![YouTube search results without Sieve: a gossip video, a row of celebrity Shorts, and more gossip below](docs/images/youtube-before-drama.png) | ![The same search with Sieve: Shorts are gone and gossip videos are greyed out, each labelled with the reason](docs/images/youtube-after-drama.png) |
 
-*Bait titles rewritten to say what the video is: "Watch THIS Before You Buy A Camera In 2026" became "Camera buying advice for 2026".*
+Or remove them completely: turn on **Hide dropped** in Settings.
+
+![The same search with Hide dropped on: only a channel result and one kept video remain](docs/images/youtube-removed-drama.png)
+
+Bait titles rewritten to say what the video is. Search: "camera review".
+
+| Without Sieve | With Sieve |
+|---|---|
+| ![Camera review results with bait titles like "Don't Buy a Camera Until You Watch This!"](docs/images/youtube-before-titles.png) | ![The same results with plain titles like "Fujifilm instax EVO 2 instant camera review"](docs/images/youtube-after-titles.png) |
+
+X and Instagram, graded straight off the page (names and avatars blurred for this README):
 
 <p>
 <img src="docs/images/x-dimmed.png" width="49%" alt="Sieve on an X home timeline: an engagement-hook post is greyed out with the label 'sieve: grader: engagement-hook hype' and 👍/👎 buttons, while the next ordinary post stays normal. Names and avatars are blurred.">
 <img src="docs/images/instagram-dimmed.png" width="49%" alt="Sieve on an Instagram home feed: a business promo post is greyed out with the label 'sieve: grader: business promo' and 👍/👎 buttons. Names are blurred.">
 </p>
 
-*X and Instagram: graded straight off the page. Names and avatars blurred for this README.*
+---
+
+## Features
+
+- **Dim or remove.** Posts Sieve decides against stay in place, greyed out with a short reason, and you can still click them. Turn on **Hide dropped** and they disappear instead.
+- **Always removed:** ads, sponsored and paid-partner posts, Shorts, YouTube mixes, "Suggested for you" posts, and upsell banners.
+- **AI grader that judges your taste.** It runs free on your Mac through Ollama, or on Claude, OpenAI or Gemini with your own API key.
+- **About you.** Describe yourself in Settings, and the grader reads that first.
+- **👍 / 👎 on every card.** Each click is permanent, beats every rule, and teaches the grader. The right-click menu adds "always keep" and "always dim" for a creator.
+- **Plain titles.** Bait YouTube titles are swapped for ones that say what the video covers, from DeArrow's community or written from the creator's own description. Hover a title to see the original.
+- **Calmer feeds.** Fewer ALL CAPS and "!!!" in titles, and thumbnails show a frame from the middle of the video.
+- **Curated keep lists.** Hacker News favourites, Kagi's small channels, and channels of photographers, filmmakers, animators and artists.
+- **AI-slop list.** About 71,000 channels that post AI-generated junk are dimmed.
+- **Bait catchers.** "Comment X for the guide", stories cut off mid-sentence, ragebait reply ratios on X, and repeats of stories you already read.
+- **Cleaner sites.** YouTube's Gemini and "Ask" buttons, X's sidebar clutter and Instagram's side rail are hidden. X gets the old bird logo back.
+- **Per-site switches and a log.** Switch each part on or off per site from the toolbar popup, and see what was filtered and why.
+- **Private by default.** Your corrections and the free grader stay on your computer.
 
 ---
 

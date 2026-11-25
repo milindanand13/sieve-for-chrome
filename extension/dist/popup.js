@@ -159,7 +159,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   // src/ui/popup.ts
   var UNIVERSAL_SWITCHES = [
     {
-      label: "pass followed creators",
+      label: "skip pattern checks for followed creators",
       get: (c) => c.passFollowed,
       set: (c, v) => {
         c.passFollowed = v;
