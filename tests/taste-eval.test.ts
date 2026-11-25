@@ -31,6 +31,30 @@ export const CASES: Case[] = [
   c("instagram", "fight", "kalesh_india", "Two aunties fighting over a parking spot in Delhi 😭 #kalesh", "d"),
 ];
 
+// Borderline posts where a small model tends to slip. SIEVE_SET=hard runs these instead.
+export const HARD: Case[] = [
+  c("x", "h1", "founderguy", "10 brutal lessons from 10 years of building startups 🧵👇", "d"),
+  c("x", "h2", "newsdesk", "Supreme Court strikes down the state's ban on drag shows, 6-3. Full opinion linked.", "k"),
+  c("x", "h3", "angrytakes", "Gen Z will never own a home and boomers are laughing at us. Wake up.", "d"),
+  c("x", "h4", "filmtwit", "The opening shot of Children of Men is 4 minutes with no cut. Here's how they rigged the car.", "k"),
+  c("x", "h5", "memepage", "POV: you're the main character and everyone else is an NPC 💀", "d"),
+  c("x", "h6", "desi_vibes", "Bride walks out of her own wedding after groom's family demands dowry, video goes viral", "d"),
+  c("x", "h7", "kitchen_nani", "My nani's dal tadka. Ghee first, then jeera until it crackles, then hing.", "k"),
+  c("x", "h8", "ai_hustler", "I made $40k in 30 days with this ChatGPT side hustle. Reply 'AI' and I'll DM you the prompt.", "d"),
+  c("x", "h9", "jpegmafia_fan", "Ranking every Radiohead album after a month of relistening", "k"),
+  c("youtube", "h10", "Mellow Sharp", "My brother got scammed: a story time", "d"),
+  c("youtube", "h11", "Kraftwerk Studio", "Lighting a night portrait with one bulb", "k"),
+  c("youtube", "h12", "Daily Dose", "Try not to laugh challenge: funniest fails of the week", "d"),
+  c("youtube", "h13", "Magnus Midtbø", "Climbing the hardest boulder in Norway with Will Bosi", "k"),
+  c("youtube", "h14", "The Diary Of A CEO", "The Doctor That Proved Everyone Wrong About Sugar!", "d"),
+  c("youtube", "h15", "Nerdwriter1", "How Wong Kar-wai uses step printing", "k"),
+  c("instagram", "h16", "thegoodquote", "Your vibe attracts your tribe ✨ Follow for daily motivation", "d"),
+  c("instagram", "h17", "studio_ana", "Film scans from Varanasi, Portra 800 pushed one stop", "k"),
+  c("instagram", "h18", "gossipmill", "She really wore THAT to the reception?? 👀 Thoughts?", "d"),
+  c("instagram", "h19", "brooklynclimbs", "New set at Vital Brooklyn this week, the purple V5 is a sandbagged slab", "k"),
+  c("instagram", "h20", "factsdaily", "99% of people don't know this about their phone 🤯 #facts #viral", "d"),
+];
+
 describe.skipIf(!live)("taste eval", () => {
   it("grades the flagged posts the way Milind would", async () => {
     // SIEVE_MODE=claude reads the key from ANTHROPIC_API_KEY or ~/.config/sieve/anthropic-key.
@@ -41,9 +65,10 @@ describe.skipIf(!live)("taste eval", () => {
     const model = process.env.SIEVE_MODEL ?? (mode === "claude" ? "claude-haiku-5-5" : DEFAULT_CONFIG.grader.model);
     const cfg = { ...DEFAULT_CONFIG, grader: { ...DEFAULT_CONFIG.grader, mode, model, apiKey } };
     const t = Date.now();
-    const v = await gradeItemsDetailed(CASES, cfg);
+    const set = process.env.SIEVE_SET === "hard" ? HARD : CASES;
+    const v = await gradeItemsDetailed(set, cfg);
     const ms = Date.now() - t;
-    const rows = CASES.map((x) => ({ id: x.id, want: x.want, got: v.get(x.id)?.verdict ?? "-", why: v.get(x.id)?.why ?? "" }));
+    const rows = set.map((x) => ({ id: x.id, want: x.want, got: v.get(x.id)?.verdict ?? "-", why: v.get(x.id)?.why ?? "" }));
     console.table(rows);
     const right = rows.filter((r) => (r.want === "d") === (r.got === "d")).length;
     console.log(`${model}: ${right}/${rows.length} right in ${ms}ms`);
