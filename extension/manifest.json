@@ -22,7 +22,8 @@
     "*://*.instagram.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*",
-    "https://dearrow.minibomba.pro/*"
+    "https://dearrow.minibomba.pro/*",
+    "https://returnyoutubedislikeapi.com/*"
   ],
   "optional_host_permissions": [
     "https://generativelanguage.googleapis.com/*",

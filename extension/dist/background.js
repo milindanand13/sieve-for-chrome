@@ -29420,14 +29420,18 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       if (decision.verdict === "drop") {
         dropped.set(item.id, decision.reason);
       } else if (decision.verdict === "uncertain") {
-        uncertain.push(item);
+        const partlyAi = creatorKeysFor(item).some((k) => seeds2.warnChannels?.has(k));
+        uncertain.push(
+          partlyAi ? { ...item, secondaryText: [item.secondaryText, "channel is flagged as partly AI-generated"].filter(Boolean).join(" \xB7 ") } : item
+        );
       }
     }
     if (uncertain.length === 0 || config2.grader.mode === "off") {
       return dropped;
     }
     const holdMs = Math.max(50, config2.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
-    const gradingPromise = gradeItemsDetailed(uncertain, config2, fetchImpl).then(async (verdicts) => {
+    const toGrade = hooks.enrich ? hooks.enrich(uncertain).catch(() => uncertain) : Promise.resolve(uncertain);
+    const gradingPromise = toGrade.then((list) => gradeItemsDetailed(list, config2, fetchImpl)).then(async (verdicts) => {
       await Promise.all(
         uncertain.map((item) => {
           const g = verdicts.get(item.id);
@@ -31091,7 +31095,8 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
   var seeds = {
     hnVideos: /* @__PURE__ */ new Set(),
     hnChannels: /* @__PURE__ */ new Set(),
-    slopChannels: /* @__PURE__ */ new Set()
+    slopChannels: /* @__PURE__ */ new Set(),
+    warnChannels: /* @__PURE__ */ new Set()
   };
   var stats = createStats({
     get: (key) => chrome.storage.local.get(key),
@@ -31130,7 +31135,8 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     await Promise.all([
       loadSeedSet("assets/seeds/hn-videos.txt", seeds.hnVideos),
       loadSeedSet("assets/seeds/hn-channels.txt", seeds.hnChannels),
-      loadSeedSet("assets/seeds/slop-channels.txt", seeds.slopChannels)
+      loadSeedSet("assets/seeds/slop-channels.txt", seeds.slopChannels),
+      loadSeedSet("assets/seeds/slop-warn-channels.txt", seeds.warnChannels)
     ]);
   }
   var ready;
@@ -31241,6 +31247,7 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     const graded = { ...config, grader: { ...config.grader, rubric: config.grader.rubric + examples } };
     const dropped = await runSieveDetailed(items, graded, seeds, memory, fetch, novelty, {
       skipHold: !config.display.hideDropped,
+      enrich: withDislikeHints,
       onGraderError: () => void stats.bumpDiag().catch(() => void 0),
       onLate: (late) => {
         void stats.record(docKey, items, late).catch(() => void 0);
@@ -31296,6 +31303,40 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     const keys = Object.keys(cache);
     for (const k of keys.slice(0, Math.max(0, keys.length - PLAIN_TITLES_CAP))) delete cache[k];
     await chrome.storage.local.set({ [PLAIN_TITLES_KEY]: cache });
+    return out;
+  }
+  var dislikeHints = /* @__PURE__ */ new Map();
+  var dislikeBackoffUntil = 0;
+  var dislikeWindowStart = 0;
+  var dislikeWindowCount = 0;
+  async function withDislikeHints(items) {
+    const out = [];
+    for (const item of items) {
+      if (item.platform !== "youtube" || !/^[\w-]{11}$/.test(item.id)) {
+        out.push(item);
+        continue;
+      }
+      if (!dislikeHints.has(item.id) && Date.now() > dislikeBackoffUntil) {
+        if (Date.now() - dislikeWindowStart > 6e4) dislikeWindowStart = Date.now(), dislikeWindowCount = 0;
+        if (dislikeWindowCount++ < 60) {
+          try {
+            const res = await fetch(`https://returnyoutubedislikeapi.com/votes?videoId=${item.id}`, {
+              credentials: "omit",
+              signal: AbortSignal.timeout(1500)
+            });
+            if (res.status === 429) dislikeBackoffUntil = Date.now() + 10 * 6e4;
+            const v = res.ok ? await res.json() : null;
+            const likes = isRecord(v) && typeof v.likes === "number" ? v.likes : 0;
+            const dislikes = isRecord(v) && typeof v.dislikes === "number" ? v.dislikes : 0;
+            const share = likes + dislikes >= 200 ? dislikes / (likes + dislikes) : 0;
+            if (res.ok) dislikeHints.set(item.id, share >= 0.2 ? `${Math.round(share * 100)}% of votes are dislikes` : "");
+          } catch {
+          }
+        }
+      }
+      const hint = dislikeHints.get(item.id);
+      out.push(hint ? { ...item, secondaryText: [item.secondaryText, hint].filter(Boolean).join(" \xB7 ") } : item);
+    }
     return out;
   }
   function targetOf(sender) {

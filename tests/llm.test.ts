@@ -79,6 +79,25 @@ describe("gradeItemsBatch and runSieveOnBatch", () => {
     ]);
   });
 
+  it("tells the grader when a channel is on the partly-AI warnlist", async () => {
+    let sent = "";
+    const memory: MemoryStore = {
+      getItemVerdict: () => undefined,
+      getCreatorVerdict: () => undefined,
+      recordVerdict: async () => {},
+      clear: async () => {},
+      counts: () => ({ cachedItems: 0, learnedCreators: 0 }),
+    };
+    const seeds: SeedSets = { hnVideos: new Set(), hnChannels: new Set(), slopChannels: new Set(), warnChannels: new Set(["halfbot"]) };
+    const mockFetch: typeof fetch = async (_url, init) => {
+      sent = String(init?.body ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"drop":[]}' } }] }), { status: 200 });
+    };
+    const items = [{ platform: "youtube" as const, id: "v1", creatorHandle: "@HalfBot", surface: "home" as const, titleOrText: "Ocean facts" }];
+    await runSieveOnBatch(items, DEFAULT_CONFIG, seeds, memory, mockFetch);
+    expect(sent).toContain("partly AI-generated");
+  });
+
   it("fails open within streamHoldMs when LLM is slow, while populating cache when it finishes", async () => {
     const recorded: Array<[string, ResolvedVerdict]> = [];
     const memory: MemoryStore = {

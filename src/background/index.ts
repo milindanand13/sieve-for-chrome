@@ -46,6 +46,7 @@ const seeds: SeedSets = {
   hnVideos: new Set(),
   hnChannels: new Set(),
   slopChannels: new Set(),
+  warnChannels: new Set(),
 };
 
 const stats = createStats({
@@ -92,6 +93,7 @@ async function initConfigAndSeeds(): Promise<void> {
     loadSeedSet("assets/seeds/hn-videos.txt", seeds.hnVideos),
     loadSeedSet("assets/seeds/hn-channels.txt", seeds.hnChannels),
     loadSeedSet("assets/seeds/slop-channels.txt", seeds.slopChannels),
+    loadSeedSet("assets/seeds/slop-warn-channels.txt", seeds.warnChannels!),
   ]);
 }
 
@@ -231,6 +233,7 @@ async function evaluate(
   const graded: SieveConfig = { ...config, grader: { ...config.grader, rubric: config.grader.rubric + examples } };
   const dropped = await runSieveDetailed(items, graded, seeds, memory, fetch, novelty, {
     skipHold: !config.display.hideDropped,
+    enrich: withDislikeHints,
     onGraderError: () => void stats.bumpDiag().catch(() => undefined),
     onLate: (late) => {
       void stats.record(docKey, items, late).catch(() => undefined);
@@ -292,6 +295,46 @@ async function plainTitlesFor(wanted: Array<{ id: string; title: string }>): Pro
   const keys = Object.keys(cache);
   for (const k of keys.slice(0, Math.max(0, keys.length - PLAIN_TITLES_CAP))) delete cache[k];
   await chrome.storage.local.set({ [PLAIN_TITLES_KEY]: cache });
+  return out;
+}
+
+// ---- Return YouTube Dislike (returnyoutubedislike.com): a high dislike share is a hint for the grader.
+// Their terms: credit the project; at most 100 requests a minute and 10,000 a day per client.
+const dislikeHints = new Map<string, string>();
+let dislikeBackoffUntil = 0;
+let dislikeWindowStart = 0;
+let dislikeWindowCount = 0;
+
+async function withDislikeHints(items: FeedItem[]): Promise<FeedItem[]> {
+  const out: FeedItem[] = [];
+  for (const item of items) {
+    if (item.platform !== "youtube" || !/^[\w-]{11}$/.test(item.id)) {
+      out.push(item);
+      continue;
+    }
+    if (!dislikeHints.has(item.id) && Date.now() > dislikeBackoffUntil) {
+      if (Date.now() - dislikeWindowStart > 60_000) (dislikeWindowStart = Date.now()), (dislikeWindowCount = 0);
+      // shortcut: per-minute cap only (60 < 100); the daily 10,000 is far above one person's scrolling.
+      if (dislikeWindowCount++ < 60) {
+        try {
+          const res = await fetch(`https://returnyoutubedislikeapi.com/votes?videoId=${item.id}`, {
+            credentials: "omit",
+            signal: AbortSignal.timeout(1500),
+          });
+          if (res.status === 429) dislikeBackoffUntil = Date.now() + 10 * 60_000;
+          const v: unknown = res.ok ? await res.json() : null;
+          const likes = isRecord(v) && typeof v.likes === "number" ? v.likes : 0;
+          const dislikes = isRecord(v) && typeof v.dislikes === "number" ? v.dislikes : 0;
+          const share = likes + dislikes >= 200 ? dislikes / (likes + dislikes) : 0;
+          if (res.ok) dislikeHints.set(item.id, share >= 0.2 ? `${Math.round(share * 100)}% of votes are dislikes` : "");
+        } catch {
+          // Unreachable or slow: grade without the hint.
+        }
+      }
+    }
+    const hint = dislikeHints.get(item.id);
+    out.push(hint ? { ...item, secondaryText: [item.secondaryText, hint].filter(Boolean).join(" · ") } : item);
+  }
   return out;
 }
 

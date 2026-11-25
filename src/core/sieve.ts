@@ -155,6 +155,8 @@ export interface SieveHooks {
   skipHold?: boolean;
   /** Grader drops that finished after the batch was already returned (id -> reason). */
   onLate?: (dropped: Map<string, string>) => void;
+  /** Adds context (e.g. dislike share) to undecided items before grading; never delays the page. */
+  enrich?: (items: FeedItem[]) => Promise<FeedItem[]>;
 }
 
 function graderDrops(verdicts: Map<string, GraderVerdict>): Map<string, string> {
@@ -183,7 +185,12 @@ export async function runSieveDetailed(
     if (decision.verdict === "drop") {
       dropped.set(item.id, decision.reason);
     } else if (decision.verdict === "uncertain") {
-      uncertain.push(item);
+      const partlyAi = creatorKeysFor(item).some((k) => seeds.warnChannels?.has(k));
+      uncertain.push(
+        partlyAi
+          ? { ...item, secondaryText: [item.secondaryText, "channel is flagged as partly AI-generated"].filter(Boolean).join(" · ") }
+          : item,
+      );
     }
   }
 
@@ -192,7 +199,9 @@ export async function runSieveDetailed(
   }
 
   const holdMs = Math.max(50, config.grader.streamHoldMs || DEFAULT_CONFIG.grader.streamHoldMs);
-  const gradingPromise = gradeItemsDetailed(uncertain, config, fetchImpl)
+  const toGrade = hooks.enrich ? hooks.enrich(uncertain).catch(() => uncertain) : Promise.resolve(uncertain);
+  const gradingPromise = toGrade
+    .then((list) => gradeItemsDetailed(list, config, fetchImpl))
     .then(async (verdicts) => {
       // Cache only what the model explicitly judged: "u", malformed and missing replies stay uncached.
       await Promise.all(

@@ -111,6 +111,8 @@ export interface SeedSets {
   hnVideos: Set<string>;
   hnChannels: Set<string>;
   slopChannels: Set<string>;
+  /** Channels that only partly use AI (AiSList warnlist): the grader is told, nothing is dimmed by rule. */
+  warnChannels?: Set<string>;
 }
 
 export interface CreatorRecord {

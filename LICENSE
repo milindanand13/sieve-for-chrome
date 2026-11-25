@@ -73,3 +73,21 @@ Upstream Submodules, Datasets, and Attributions
    Copyright (c) Anthropic, PBC. Licensed under the Apache License 2.0.
    Bundled into extension/dist/background.js for the Claude grader option.
    Full license text: licenses/anthropic-sdk-typescript-APACHE-2.0.txt
+
+10. Kagi Small Web (https://github.com/kagisearch/smallweb)
+    Copyright (c) Kagi Inc. Licensed under the MIT License.
+    Used: YouTube channel IDs from smallyt.txt, merged into
+    extension/assets/seeds/hn-channels.txt (keep list).
+
+11. Wikidata (https://www.wikidata.org)
+    Structured data released under CC0 1.0 (public domain dedication).
+    Used: YouTube channel IDs (P2397) of photographers, filmmakers, animators,
+    film directors, painters, sculptors, graphic designers and architects,
+    merged into extension/assets/seeds/hn-channels.txt (keep list).
+
+12. AiSList warnlist (same source and license as item 2, CC BY-NC 4.0)
+    Used: extension/assets/seeds/slop-warn-channels.txt.
+
+13. Return YouTube Dislike (https://returnyoutubedislike.com)
+    Public API used at runtime for dislike counts, credited per its usage
+    rights (attribution; at most 100 requests a minute, 10,000 a day).

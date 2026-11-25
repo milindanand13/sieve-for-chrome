@@ -30,8 +30,8 @@ Each post goes down a checklist, and the first rule with an answer wins:
 1. Your own 👍 or 👎 on that post. Final.
 2. Ads and sponsored posts. Always out.
 3. Creators you set to always keep or always dim.
-4. Videos and channels shared on Hacker News, from Andrej Karpathy's [HackerTube](https://hackertube.org). Kept.
-5. About 71,000 channels on a public list of AI-generated junk ([AiSList](https://github.com/Override92/AiSList)). Dimmed.
+4. Curated channels, kept: videos and channels shared on Hacker News (Andrej Karpathy's [HackerTube](https://hackertube.org)), small hand-picked channels from [Kagi Small Web](https://github.com/kagisearch/smallweb), and about 3,300 channels of photographers, filmmakers, animators, painters, sculptors, designers and architects listed on [Wikidata](https://www.wikidata.org).
+5. About 71,000 channels on a public list of AI-generated junk ([AiSList](https://github.com/Override92/AiSList)). Dimmed. About 1,400 more that only partly use AI are not dimmed; the grader is told.
 6. Wording that gives bait away: "comment X and I'll DM you the link", crypto casino codes, short-drama episodes, siren-emoji fake breaking news, gossip.
 7. On X and Instagram, the rhythm of engagement farming. On X, a repeat of a story you already read is dimmed as "seen before".
 8. A verdict the grader already gave this exact post.
@@ -41,7 +41,7 @@ Each post goes down a checklist, and the first rule with an answer wins:
 
 ### 3. The grader
 
-The grader is a small AI model (qwen3.5:4b) running on your Mac through Ollama, the app that runs AI models locally. Posts go to it in batches of up to 20, each as its text, its creator, and a note if you follow the account. With every batch it gets your taste description and the 30 past corrections of yours that look most like the posts in front of it. It answers keep, unsure or drop for each post, with a 2 to 4 word reason for every drop, like "viral shock clips". Unsure means keep. It gets 6 seconds; anything slower is left alone. Verdicts are saved, so no post is judged twice.
+The grader is a small AI model (qwen3.5:4b) running on your Mac through Ollama, the app that runs AI models locally. Posts go to it in batches of up to 20, each as its text, its creator, and a note if you follow the account. With every batch it gets your taste description and the 30 past corrections of yours that look most like the posts in front of it. For YouTube videos it also checks the dislike share from [Return YouTube Dislike](https://returnyoutubedislike.com) and mentions it when a fifth or more of the votes are dislikes. It answers keep, unsure or drop for each post, with a 2 to 4 word reason for every drop, like "viral shock clips". Unsure means keep. It gets 6 seconds; anything slower is left alone. Verdicts are saved, so no post is judged twice.
 
 ### 4. What you see
 
@@ -57,7 +57,7 @@ Shouty titles are calmed (less ALL CAPS, fewer "!!!"). Bait YouTube titles ("Wha
 
 ### 7. What leaves your computer
 
-Almost nothing. The grader runs on your Mac, and your corrections and verdicts stay in Chrome. DeArrow title lookups send video IDs to a DeArrow server, and plain titles load the video's YouTube page without your sign-in. If you switch the grader to **api** mode in Settings, post text goes to the AI service you set up there.
+Almost nothing. The grader runs on your Mac, and your corrections and verdicts stay in Chrome. DeArrow title lookups and Return YouTube Dislike send video IDs to those projects' servers, and plain titles load the video's YouTube page without your sign-in. If you switch the grader to **api** mode in Settings, post text goes to the AI service you set up there.
 
 ### 8. Limits
 
