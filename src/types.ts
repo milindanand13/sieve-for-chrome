@@ -185,6 +185,7 @@ export type RuntimeMessage =
   | { type: "CLEAR_VERDICT_CACHE" }
   | { type: "RECORD_DWELL"; text: string }
   | { type: "RESOLVE_DEARROW_TITLES"; videoIds: string[]; titles?: Record<string, string> }
+  | { type: "RESOLVE_DEARROW_THUMBS"; videoIds: string[] }
   | { type: "EVALUATE_SSR_ITEMS"; items: FeedItem[] }
   | { type: "TEST_GRADER"; graderOverride?: GraderSettings };
 

@@ -8,6 +8,9 @@ const VAGUE_TITLE_RE =
   /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
 
 const titleCache = new Map<string, string | null>();
+/** Community-picked thumbnail frame (seconds into the video), or null when there is none. */
+const thumbCache = new Map<string, number | null>();
+const DEARROW_THUMB_BASE = "https://dearrow-thumb.ajay.app/api/v1/getThumbnail";
 const fetchedPrefixes = new Map<string, number>();
 
 export async function sha256Prefix4(input: string): Promise<string> {
@@ -43,6 +46,7 @@ export function getCachedDeArrowTitle(videoId: string): string | undefined {
 
 export function clearDeArrowCache(): void {
   titleCache.clear();
+  thumbCache.clear();
   fetchedPrefixes.clear();
 }
 
@@ -57,6 +61,31 @@ function pickBestCommunityTitle(record: unknown): string | null {
     if (cleaned.length >= 4) return cleaned;
   }
   return null;
+}
+
+/** The frame volunteers voted best, like the title pick: skipped when the original thumbnail won. */
+export function pickBestCommunityThumb(record: unknown): number | null {
+  if (!isRecord(record) || !Array.isArray(record.thumbnails)) return null;
+  for (const t of record.thumbnails) {
+    if (!isRecord(t)) continue;
+    const votes = typeof t.votes === "number" ? t.votes : -1;
+    if (t.locked !== true && votes < 0) continue;
+    if (t.original === true) return null;
+    if (typeof t.timestamp === "number" && t.timestamp >= 0) return t.timestamp;
+  }
+  return null;
+}
+
+/** DeArrow thumbnail URLs (video id -> url, "" when there is none) for ids whose bucket was fetched. */
+export async function lookupDeArrowThumbs(videoIds: string[], fetchImpl: typeof fetch = fetch): Promise<Map<string, string>> {
+  await lookupDeArrowTitles(videoIds, fetchImpl); // same buckets; fills thumbCache too
+  const out = new Map<string, string>();
+  for (const vid of videoIds) {
+    if (!thumbCache.has(vid)) continue; // bucket not fetched yet: the page asks again later
+    const t = thumbCache.get(vid);
+    out.set(vid, t == null ? "" : `${DEARROW_THUMB_BASE}?videoID=${vid}&time=${t}`);
+  }
+  return out;
 }
 
 export async function lookupDeArrowTitles(
@@ -106,9 +135,11 @@ export async function lookupDeArrowTitles(
 
         for (const [vid, rec] of Object.entries(bucket)) {
           titleCache.set(vid, pickBestCommunityTitle(rec));
+          thumbCache.set(vid, pickBestCommunityThumb(rec));
         }
         for (const reqVid of requestedVids) {
           if (!titleCache.has(reqVid)) titleCache.set(reqVid, null);
+          if (!thumbCache.has(reqVid)) thumbCache.set(reqVid, null);
           const hit = titleCache.get(reqVid);
           if (hit) result.set(reqVid, hit);
         }

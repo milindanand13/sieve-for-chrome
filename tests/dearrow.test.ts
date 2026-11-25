@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cleanDeArrowTitle,
   isVagueClickbaitTitle,
+  pickBestCommunityThumb,
   lookupDeArrowTitles,
   sha256Prefix4,
 } from "../src/core/dearrow.js";
@@ -65,5 +66,15 @@ describe("DeArrow k-anonymous title curating", () => {
     const resolved = await lookupDeArrowTitles(["dQw4w9WgXcQ"], mockFetch);
     expect(resolved.get("dQw4w9WgXcQ")).toBe("Rick Astley - Never Gonna Give You Up");
     expect(resolved.has("untrustedVid1")).toBe(false);
+  });
+
+  it("picks the community thumbnail frame, or none when the original won", () => {
+    const frame = { thumbnails: [{ timestamp: 3.7, original: false, votes: 6, locked: false }, { timestamp: null, original: true, votes: 9 }] };
+    const original = { thumbnails: [{ timestamp: null, original: true, votes: 2 }, { timestamp: 5, original: false, votes: 0 }] };
+    const downvoted = { thumbnails: [{ timestamp: 8, original: false, votes: -1, locked: false }] };
+    expect(pickBestCommunityThumb(frame)).toBe(3.7);
+    expect(pickBestCommunityThumb(original)).toBeNull();
+    expect(pickBestCommunityThumb(downvoted)).toBeNull();
+    expect(pickBestCommunityThumb({})).toBeNull();
   });
 });

@@ -1297,6 +1297,8 @@
   var FETCH_TIMEOUT_MS = 2500;
   var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong|watch this|until you watch|you need to (?:see|know)|the only \w+(?: \w+)? you(?:'ll)? (?:ever )?need)\b|!(?:\s*\([^)]*\))?\s*$|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
   var titleCache = /* @__PURE__ */ new Map();
+  var thumbCache = /* @__PURE__ */ new Map();
+  var DEARROW_THUMB_BASE = "https://dearrow-thumb.ajay.app/api/v1/getThumbnail";
   var fetchedPrefixes = /* @__PURE__ */ new Map();
   async function sha256Prefix4(input) {
     const bytes = new TextEncoder().encode(input);
@@ -1325,6 +1327,7 @@
   }
   function clearDeArrowCache() {
     titleCache.clear();
+    thumbCache.clear();
     fetchedPrefixes.clear();
   }
   function pickBestCommunityTitle(record) {
@@ -1338,6 +1341,27 @@
       if (cleaned.length >= 4) return cleaned;
     }
     return null;
+  }
+  function pickBestCommunityThumb(record) {
+    if (!isRecord(record) || !Array.isArray(record.thumbnails)) return null;
+    for (const t of record.thumbnails) {
+      if (!isRecord(t)) continue;
+      const votes = typeof t.votes === "number" ? t.votes : -1;
+      if (t.locked !== true && votes < 0) continue;
+      if (t.original === true) return null;
+      if (typeof t.timestamp === "number" && t.timestamp >= 0) return t.timestamp;
+    }
+    return null;
+  }
+  async function lookupDeArrowThumbs(videoIds, fetchImpl = fetch) {
+    await lookupDeArrowTitles(videoIds, fetchImpl);
+    const out = /* @__PURE__ */ new Map();
+    for (const vid of videoIds) {
+      if (!thumbCache.has(vid)) continue;
+      const t = thumbCache.get(vid);
+      out.set(vid, t == null ? "" : `${DEARROW_THUMB_BASE}?videoID=${vid}&time=${t}`);
+    }
+    return out;
   }
   async function lookupDeArrowTitles(videoIds, fetchImpl = fetch) {
     const result = /* @__PURE__ */ new Map();
@@ -1379,9 +1403,11 @@
           fetchedPrefixes.set(prefix, now);
           for (const [vid, rec] of Object.entries(bucket)) {
             titleCache.set(vid, pickBestCommunityTitle(rec));
+            thumbCache.set(vid, pickBestCommunityThumb(rec));
           }
           for (const reqVid of requestedVids) {
             if (!titleCache.has(reqVid)) titleCache.set(reqVid, null);
+            if (!thumbCache.has(reqVid)) thumbCache.set(reqVid, null);
             const hit = titleCache.get(reqVid);
             if (hit) result.set(reqVid, hit);
           }
@@ -31433,6 +31459,13 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
         }
         return { titles: Object.fromEntries(map) };
       });
+    }
+    if (raw.type === "RESOLVE_DEARROW_THUMBS" && Array.isArray(raw.videoIds)) {
+      if (!config.enabled || !config.youtube.enabled || !config.youtube.midFrameThumbs) {
+        return Promise.resolve({ thumbs: {} });
+      }
+      const ids = raw.videoIds.filter((id) => typeof id === "string" && /^[\w-]{11}$/.test(id)).slice(0, 24);
+      return lookupDeArrowThumbs(ids).then((map) => ({ thumbs: Object.fromEntries(map) }));
     }
     if (raw.type === "EVALUATE_SSR_ITEMS" && Array.isArray(raw.items)) {
       const items = raw.items.slice(0, 500).filter(

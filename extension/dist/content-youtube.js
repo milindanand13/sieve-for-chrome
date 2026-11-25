@@ -766,6 +766,10 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       (event) => {
         const target = event.target;
         if (!(target instanceof HTMLImageElement)) return;
+        if (target.src.includes("dearrow-thumb.ajay.app") && target.dataset.sieveOrigSrc) {
+          target.src = target.dataset.sieveOrigSrc;
+          return;
+        }
         if (target.src.includes("/hq2.jpg") && !target.dataset.sieveFallback) {
           target.dataset.sieveFallback = "1";
           target.src = target.src.replace("/hq2.jpg", "/hqdefault.jpg");
@@ -825,6 +829,36 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   var activeConfig = null;
   var evaluatedDomVideos = /* @__PURE__ */ new Set();
   var dearrowCheckedVideos = /* @__PURE__ */ new Set();
+  var dearrowThumbs = /* @__PURE__ */ new Map();
+  var thumbRequestInFlight = false;
+  async function applyDeArrowThumbs() {
+    if (!activeConfig?.enabled || !activeConfig.youtube.enabled || !activeConfig.youtube.midFrameThumbs) return;
+    const imgs = [...document.querySelectorAll('img[src*="ytimg.com/vi/"]:not([data-sieve-dearrow])')];
+    const vidOf = (img) => /ytimg\.com\/vi(?:_webp)?\/([\w-]{11})\//.exec(img.src)?.[1] ?? "";
+    for (const img of imgs) {
+      const url = dearrowThumbs.get(vidOf(img));
+      if (url === void 0) continue;
+      img.dataset.sieveDearrow = "1";
+      if (url) {
+        img.dataset.sieveOrigSrc = img.src;
+        img.removeAttribute("srcset");
+        img.src = url;
+      }
+    }
+    const wanted = [...new Set(imgs.map(vidOf).filter((v) => v && !dearrowThumbs.has(v)))].slice(0, 24);
+    if (wanted.length === 0 || thumbRequestInFlight) return;
+    thumbRequestInFlight = true;
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "RESOLVE_DEARROW_THUMBS", videoIds: wanted });
+      if (isRecord(res) && isRecord(res.thumbs)) {
+        for (const [vid, url] of Object.entries(res.thumbs)) if (typeof url === "string") dearrowThumbs.set(vid, url);
+      }
+    } catch {
+    } finally {
+      thumbRequestInFlight = false;
+    }
+    if (wanted.some((v) => dearrowThumbs.has(v))) schedulePolish();
+  }
   var trackWatchTitleDwell = createDwellTracker((el) => el.textContent ?? "", 2500);
   installMidFrameThumbFallback();
   async function resolveVagueDomTitles() {
@@ -998,6 +1032,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const watchHeading = document.querySelector("ytd-watch-metadata h1");
     if (watchHeading) trackWatchTitleDwell(watchHeading);
     void resolveVagueDomTitles();
+    void applyDeArrowThumbs();
     void evaluateUnfilteredDomCards();
   }
   var schedulePolish = createRafScheduler(polishRenderedCards);

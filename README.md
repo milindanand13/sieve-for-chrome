@@ -39,7 +39,7 @@ X and Instagram, graded straight off the page (names and avatars blurred for thi
 - **About you.** Describe yourself in Settings, and the grader reads that first.
 - **👍 / 👎 on every card.** Each click is permanent, beats every rule, and teaches the grader. The right-click menu adds "always keep" and "always dim" for a creator.
 - **Plain titles.** Bait YouTube titles are swapped for ones that say what the video covers, from DeArrow's community or written from the creator's own description. Hover a title to see the original.
-- **Calmer feeds.** Fewer ALL CAPS and "!!!" in titles, and thumbnails show a frame from the middle of the video.
+- **Honest thumbnails.** Where DeArrow volunteers picked the frame that best shows the video, Sieve uses it; otherwise it shows a frame from the middle of the video instead of the designed thumbnail. Titles get fewer ALL CAPS and "!!!".
 - **Curated keep lists.** Hacker News favourites, Kagi's small channels, and channels of photographers, filmmakers, animators and artists.
 - **AI-slop list.** About 71,000 channels that post AI-generated junk are dimmed.
 - **Bait catchers.** "Comment X for the guide", stories cut off mid-sentence, ragebait reply ratios on X, and repeats of stories you already read.
@@ -92,7 +92,7 @@ Shouty titles are calmed (less ALL CAPS, fewer "!!!"). Bait YouTube titles ("Wha
 
 ### 7. What leaves your computer
 
-Almost nothing. The grader runs on your Mac, and your corrections and verdicts stay in Chrome. DeArrow title lookups and Return YouTube Dislike send video IDs to those projects' servers, and plain titles load the video's YouTube page without your sign-in. If you switch the grader to **api** mode in Settings, post text goes to the AI service you set up there.
+Almost nothing. The grader runs on your Mac, and your corrections and verdicts stay in Chrome. DeArrow title and thumbnail lookups and Return YouTube Dislike send video IDs to those projects' servers, and plain titles load the video's YouTube page without your sign-in. If you switch the grader to **api** mode in Settings, post text goes to the AI service you set up there.
 
 ### 8. Limits
 

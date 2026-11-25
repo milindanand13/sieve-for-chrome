@@ -1,4 +1,4 @@
-import { clearDeArrowCache, lookupDeArrowTitles } from "../core/dearrow.js";
+import { clearDeArrowCache, lookupDeArrowThumbs, lookupDeArrowTitles } from "../core/dearrow.js";
 import { gradeItemsBatch } from "../core/llm.js";
 import { extractShortDescription, writePlainTitles, type TitleJob } from "../core/plain-titles.js";
 import { runSieveDetailed } from "../core/sieve.js";
@@ -473,6 +473,14 @@ function handle(
       }
       return { titles: Object.fromEntries(map) };
     });
+  }
+
+  if (raw.type === "RESOLVE_DEARROW_THUMBS" && Array.isArray(raw.videoIds)) {
+    if (!config.enabled || !config.youtube.enabled || !config.youtube.midFrameThumbs) {
+      return Promise.resolve({ thumbs: {} });
+    }
+    const ids = raw.videoIds.filter((id): id is string => typeof id === "string" && /^[\w-]{11}$/.test(id)).slice(0, 24);
+    return lookupDeArrowThumbs(ids).then((map) => ({ thumbs: Object.fromEntries(map) }));
   }
 
   if (raw.type === "EVALUATE_SSR_ITEMS" && Array.isArray(raw.items)) {

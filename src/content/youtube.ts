@@ -25,6 +25,39 @@ const AI_BUTTON_RE = /\bgemini\b|\bask\s+youtube\b|\bsearch\s+with\s+ai\b|\bask\
 let activeConfig: SieveConfig | null = null;
 const evaluatedDomVideos = new Set<string>();
 const dearrowCheckedVideos = new Set<string>();
+const dearrowThumbs = new Map<string, string>(); // video id -> DeArrow frame url ("" = none)
+let thumbRequestInFlight = false;
+
+/** Swaps in the frame DeArrow volunteers picked, when one exists; mid-frame stays the fallback. */
+async function applyDeArrowThumbs(): Promise<void> {
+  if (!activeConfig?.enabled || !activeConfig.youtube.enabled || !activeConfig.youtube.midFrameThumbs) return;
+  const imgs = [...document.querySelectorAll<HTMLImageElement>('img[src*="ytimg.com/vi/"]:not([data-sieve-dearrow])')];
+  const vidOf = (img: HTMLImageElement): string => /ytimg\.com\/vi(?:_webp)?\/([\w-]{11})\//.exec(img.src)?.[1] ?? "";
+  for (const img of imgs) {
+    const url = dearrowThumbs.get(vidOf(img));
+    if (url === undefined) continue;
+    img.dataset.sieveDearrow = "1";
+    if (url) {
+      img.dataset.sieveOrigSrc = img.src;
+      img.removeAttribute("srcset");
+      img.src = url;
+    }
+  }
+  const wanted = [...new Set(imgs.map(vidOf).filter((v) => v && !dearrowThumbs.has(v)))].slice(0, 24);
+  if (wanted.length === 0 || thumbRequestInFlight) return;
+  thumbRequestInFlight = true;
+  try {
+    const res: unknown = await chrome.runtime.sendMessage({ type: "RESOLVE_DEARROW_THUMBS", videoIds: wanted });
+    if (isRecord(res) && isRecord(res.thumbs)) {
+      for (const [vid, url] of Object.entries(res.thumbs)) if (typeof url === "string") dearrowThumbs.set(vid, url);
+    }
+  } catch {
+    // Background unavailable: thumbnails stay as they are.
+  } finally {
+    thumbRequestInFlight = false;
+  }
+  if (wanted.some((v) => dearrowThumbs.has(v))) schedulePolish();
+}
 const trackWatchTitleDwell = createDwellTracker((el) => el.textContent ?? "", 2500);
 
 installMidFrameThumbFallback();
@@ -239,6 +272,7 @@ function polishRenderedCards(): void {
   if (watchHeading) trackWatchTitleDwell(watchHeading);
 
   void resolveVagueDomTitles();
+  void applyDeArrowThumbs();
   void evaluateUnfilteredDomCards();
 }
 

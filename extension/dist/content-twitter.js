@@ -743,6 +743,10 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       (event) => {
         const target = event.target;
         if (!(target instanceof HTMLImageElement)) return;
+        if (target.src.includes("dearrow-thumb.ajay.app") && target.dataset.sieveOrigSrc) {
+          target.src = target.dataset.sieveOrigSrc;
+          return;
+        }
         if (target.src.includes("/hq2.jpg") && !target.dataset.sieveFallback) {
           target.dataset.sieveFallback = "1";
           target.src = target.src.replace("/hq2.jpg", "/hqdefault.jpg");
