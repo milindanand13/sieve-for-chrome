@@ -1,10 +1,8 @@
 # Sieve for Chrome
 
-There is *sooo* much good content out there, and it's a shame most rec algorithms are built to one-shot you into a brain-dead state. Sieve filters your feeds so the good stuff is easier to find.
-
 Sieve sits between YouTube, X and Instagram and your eyes. It looks at every post as it arrives, decides whether it's worth your attention, and removes or greys out the ones that aren't. A small AI model on your own computer does the judging, against a written description of your taste, and it learns from every 👍 and 👎 you give it.
 
-Teddy Warner built the original for Firefox: [Twarner491/sieve](https://github.com/Twarner491/sieve). This fork, by Milind Anand (built with Claude Code), ports it to Chrome and adds the feedback loop.
+By Milind Anand, built with Claude Code. Based on Teddy Warner's original Firefox extension, [Twarner491/sieve](https://github.com/Twarner491/sieve) (MIT license): the idea and the core design are his. This version runs on Chrome and adds 👍 / 👎 feedback, creator learning, grading from the page, and plain titles.
 
 ![Sieve on YouTube, Twitter, Instagram, and TikTok](docs/images/sieve-example.png)
 
@@ -49,11 +47,11 @@ Hover any card and 👍 / 👎 appear on its left edge. Or right-click the card 
 
 ### 6. Smaller cleanups
 
-Shouty titles are calmed (less ALL CAPS, fewer "!!!"). Vague clickbait YouTube titles are swapped for honest ones written by the [DeArrow](https://dearrow.ajay.app/) community. Thumbnails show a frame from the middle of the video instead of the designed one. X gets the old bird logo back and a quieter sidebar.
+Shouty titles are calmed (less ALL CAPS, fewer "!!!"). Bait YouTube titles ("What Happened to L.L. Bean?", "I tested...", titles ending in a question) are swapped for ones that say what the video covers. Sieve first uses a title written by the [DeArrow](https://dearrow.ajay.app/) community; if there is none, it reads the creator's description and has the grader write one, such as "Reviewing L.L. Bean products like bean boots, field coats, and wool sweaters". Hover a swapped title to see the original. Thumbnails show a frame from the middle of the video instead of the designed one. X gets the old bird logo back and a quieter sidebar.
 
 ### 7. What leaves your computer
 
-Almost nothing. The grader runs on your Mac, and your corrections and verdicts stay in Chrome. DeArrow title lookups send video IDs to a DeArrow server. If you switch the grader to **api** mode in Settings, post text goes to the AI service you set up there.
+Almost nothing. The grader runs on your Mac, and your corrections and verdicts stay in Chrome. DeArrow title lookups send video IDs to a DeArrow server, and plain titles load the video's YouTube page without your sign-in. If you switch the grader to **api** mode in Settings, post text goes to the AI service you set up there.
 
 ### 8. Limits
 
@@ -61,9 +59,9 @@ The model is small. It's fast enough for a live feed and still makes taste mista
 
 ---
 
-## Why a Chrome fork
+## Why a Chrome version
 
-Firefox lets an extension rewrite a site's feed data inside the browser's network layer, before the page ever sees it. Teddy's version is built on that. Chrome's current extension system (Manifest V3) took that ability away, so this fork wraps the page's own data requests instead and passes each feed response to Sieve's background script for judging. Ollama also refuses requests from Chrome extensions by default, so Sieve strips the header that triggers the refusal. Everything else, from the checklist to the grader, is Teddy's design, extended here with 👍 / 👎 feedback, creator learning and grading from the page.
+Firefox lets an extension rewrite a site's feed data inside the browser's network layer, before the page ever sees it. Teddy's version is built on that. Chrome's current extension system (Manifest V3) took that ability away, so this version wraps the page's own data requests instead and passes each feed response to Sieve's background script for judging. Ollama also refuses requests from Chrome extensions by default, so Sieve strips the header that triggers the refusal. Everything else, from the checklist to the grader, is Teddy's design, extended here with 👍 / 👎 feedback, creator learning and grading from the page.
 
 ---
 

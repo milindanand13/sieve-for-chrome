@@ -178,7 +178,7 @@ export type RuntimeMessage =
   | { type: "CLEAR_CACHE" }
   | { type: "CLEAR_VERDICT_CACHE" }
   | { type: "RECORD_DWELL"; text: string }
-  | { type: "RESOLVE_DEARROW_TITLES"; videoIds: string[] }
+  | { type: "RESOLVE_DEARROW_TITLES"; videoIds: string[]; titles?: Record<string, string> }
   | { type: "EVALUATE_SSR_ITEMS"; items: FeedItem[] }
   | { type: "TEST_GRADER"; graderOverride?: GraderSettings };
 

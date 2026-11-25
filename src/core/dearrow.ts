@@ -5,7 +5,7 @@ const BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 2500;
 
 const VAGUE_TITLE_RE =
-  /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed)\b|\.\.\.\s*$|\?!|!\?)/i;
+  /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong)\b|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
 
 const titleCache = new Map<string, string | null>();
 const fetchedPrefixes = new Map<string, number>();

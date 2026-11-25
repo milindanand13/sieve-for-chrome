@@ -9,7 +9,7 @@
   var DEARROW_MIRROR_BASE = "https://dearrow.minibomba.pro/sbserver/api/branding";
   var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
   var FETCH_TIMEOUT_MS = 2500;
-  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed)\b|\.\.\.\s*$|\?!|!\?)/i;
+  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong)\b|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
   var titleCache = /* @__PURE__ */ new Map();
   var fetchedPrefixes = /* @__PURE__ */ new Map();
   async function sha256Prefix4(input) {
@@ -223,16 +223,26 @@ Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`
   }
   async function gradeChunk(items, config2, fetchImpl) {
     if (config2.grader.mode === "off" || items.length === 0) return /* @__PURE__ */ new Map();
+    const reply = await chatJson(
+      config2,
+      `${config2.grader.rubric.trim()}
+
+${VERDICT_OUTPUT_INSTRUCTIONS}`,
+      JSON.stringify(items.map(summarizeIndexedItem)),
+      BACKGROUND_TIMEOUT_MS,
+      fetchImpl
+    );
+    return parseVerdictMap(reply, items.map((item) => item.id));
+  }
+  async function chatJson(config2, system, user, timeoutMs, fetchImpl = fetch) {
     if (!config2.grader.endpoint || !config2.grader.model) {
       throw new Error("Missing grader endpoint or model");
     }
     if (config2.grader.mode === "api" && !config2.grader.apiKey.trim()) {
       throw new Error("Missing API key");
     }
-    const batch = items;
-    const orderedIds = batch.map((item) => item.id);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BACKGROUND_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const headers = {
       "Content-Type": "application/json"
     };
@@ -257,16 +267,8 @@ Every index not listed is kept. Use {"drop":[]} when nothing should be dropped.`
             response_format: { type: "json_object" }
           } : {},
           messages: [
-            {
-              role: "system",
-              content: `${config2.grader.rubric.trim()}
-
-${VERDICT_OUTPUT_INSTRUCTIONS}`
-            },
-            {
-              role: "user",
-              content: JSON.stringify(batch.map(summarizeIndexedItem))
-            }
+            { role: "system", content: system },
+            { role: "user", content: user }
           ]
         })
       });
@@ -274,10 +276,49 @@ ${VERDICT_OUTPUT_INSTRUCTIONS}`
         throw new Error(`HTTP ${res.status}`);
       }
       const body = await res.json();
-      return parseVerdictMap(readFirstChoiceContent(body), orderedIds);
+      return readFirstChoiceContent(body);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  // src/core/plain-titles.ts
+  var WRITE_TIMEOUT_MS = 2e4;
+  var DESC_CHARS = 900;
+  var PLAIN_TITLE_INSTRUCTIONS = `You rewrite YouTube titles that bait the viewer into ones that say what the video is actually about.
+For each item you get its title, channel, and the creator's description. Write one plain title that names the real subject and what the video covers, using only facts from the title and description. Ignore sponsor and link lines.
+Rules: at most 100 characters, no questions, no hype words, no ALL CAPS, no emoji, no "you". If the description does not say what the video covers, return the original title unchanged.
+Return ONLY a JSON object mapping each index to its new title, like {"0":"How L.L. Bean boots are made and how the company has changed"}.`;
+  function extractShortDescription(html) {
+    const m = /"shortDescription":("(?:[^"\\]|\\.)*")/.exec(html);
+    if (!m?.[1]) return "";
+    try {
+      const parsed = JSON.parse(m[1]);
+      return typeof parsed === "string" ? parsed : "";
+    } catch {
+      return "";
+    }
+  }
+  async function writePlainTitles(jobs, config2, fetchImpl = fetch) {
+    const out = /* @__PURE__ */ new Map();
+    const usable = jobs.filter((j) => j.desc.trim().length >= 40);
+    if (config2.grader.mode === "off" || usable.length === 0) return out;
+    const reply = await chatJson(
+      config2,
+      PLAIN_TITLE_INSTRUCTIONS,
+      JSON.stringify(usable.map((j, i) => ({ i: String(i), title: j.title, desc: j.desc.slice(0, DESC_CHARS) }))),
+      WRITE_TIMEOUT_MS,
+      fetchImpl
+    );
+    const parsed = extractJsonObject(reply);
+    if (!isRecord(parsed)) return out;
+    usable.forEach((job, i) => {
+      const t = parsed[String(i)];
+      if (typeof t !== "string") return;
+      const clean = t.replace(/\s+/g, " ").trim().slice(0, 120);
+      if (clean.length >= 8 && clean.toLowerCase() !== job.title.toLowerCase()) out.set(job.id, clean);
+    });
+    return out;
   }
 
   // src/defaults.ts
@@ -2735,6 +2776,44 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
     if (dropped.size > 0) await setSessionCount(await getSessionCount() + dropped.size);
     return dropped;
   }
+  var PLAIN_TITLES_KEY = "sievePlainTitles";
+  var PLAIN_TITLES_CAP = 3e3;
+  async function plainTitlesFor(wanted) {
+    const out = /* @__PURE__ */ new Map();
+    if (wanted.length === 0 || config.grader.mode === "off") return out;
+    const stored = (await chrome.storage.local.get(PLAIN_TITLES_KEY))[PLAIN_TITLES_KEY];
+    const cache = isRecord(stored) ? stored : {};
+    const todo = wanted.filter((w) => {
+      if (typeof cache[w.id] !== "string") return true;
+      if (cache[w.id]) out.set(w.id, cache[w.id]);
+      return false;
+    });
+    if (todo.length === 0) return out;
+    const jobs = [];
+    for (let i = 0; i < todo.length; i += 4) {
+      await Promise.all(
+        todo.slice(i, i + 4).map(async (w) => {
+          try {
+            const res = await fetch(`https://www.youtube.com/watch?v=${w.id}`, { credentials: "omit" });
+            if (res.ok) jobs.push({ ...w, desc: extractShortDescription(await res.text()) });
+          } catch {
+          }
+        })
+      );
+    }
+    let written = /* @__PURE__ */ new Map();
+    try {
+      written = await writePlainTitles(jobs, config);
+    } catch {
+      return out;
+    }
+    for (const job of jobs) cache[job.id] = written.get(job.id) ?? "";
+    for (const [id, t] of written) out.set(id, t);
+    const keys = Object.keys(cache);
+    for (const k of keys.slice(0, Math.max(0, keys.length - PLAIN_TITLES_CAP))) delete cache[k];
+    await chrome.storage.local.set({ [PLAIN_TITLES_KEY]: cache });
+    return out;
+  }
   function targetOf(sender) {
     return sender.tab?.id === void 0 ? void 0 : { tabId: sender.tab.id, frameId: sender.frameId ?? 0 };
   }
@@ -2816,12 +2895,15 @@ The user corrected earlier verdicts. Judge similar items the same way. The quote
       if (!config.enabled || !config.youtube.enabled || !config.youtube.dearrowTitles) {
         return Promise.resolve({ titles: {} });
       }
-      const videoIds = raw.videoIds.filter((id) => typeof id === "string");
-      return lookupDeArrowTitles(videoIds).then(
-        (map) => ({
-          titles: Object.fromEntries(map)
-        })
-      );
+      const videoIds = raw.videoIds.filter((id) => typeof id === "string" && /^[\w-]{11}$/.test(id));
+      const rawTitles = isRecord(raw.titles) ? raw.titles : {};
+      return lookupDeArrowTitles(videoIds).then(async (map) => {
+        const missing = videoIds.filter((id) => !map.has(id) && typeof rawTitles[id] === "string");
+        for (const [id, t] of await plainTitlesFor(missing.map((id2) => ({ id: id2, title: String(rawTitles[id2]) })))) {
+          map.set(id, t);
+        }
+        return { titles: Object.fromEntries(map) };
+      });
     }
     if (raw.type === "EVALUATE_SSR_ITEMS" && Array.isArray(raw.items)) {
       const items = raw.items.slice(0, 500).filter(

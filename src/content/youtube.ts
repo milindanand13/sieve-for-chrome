@@ -64,6 +64,9 @@ async function resolveVagueDomTitles(): Promise<void> {
     const res: unknown = await chrome.runtime.sendMessage({
       type: "RESOLVE_DEARROW_TITLES",
       videoIds: [...titleElsByVid.keys()].slice(0, 16),
+      titles: Object.fromEntries(
+        [...titleElsByVid].map(([vid, els]) => [vid, els[0]?.textContent?.trim() ?? ""]),
+      ),
     });
     if (!isRecord(res) || !isRecord(res.titles)) return;
 
@@ -72,8 +75,9 @@ async function resolveVagueDomTitles(): Promise<void> {
       if (!targets || typeof curated !== "string" || !curated) continue;
       const finalTitle = activeConfig?.youtube.calmTitles ? calmTitle(curated) : curated;
       for (const el of targets) {
+        const original = el.textContent?.trim() ?? "";
         el.textContent = finalTitle;
-        el.title = finalTitle;
+        el.title = `Original title: ${original}`;
       }
     }
   } catch {

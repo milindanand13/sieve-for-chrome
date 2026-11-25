@@ -7,7 +7,7 @@
 
   // src/core/dearrow.ts
   var BUCKET_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
-  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed)\b|\.\.\.\s*$|\?!|!\?)/i;
+  var VAGUE_TITLE_RE = /(?:\b(?:this changed everything|changes everything|why nobody|no one talks about|you won'?t believe|what happened|i tried\b|for \d+ days|the truth about|it'?s over|he'?s done|she'?s done|they'?re done|stop doing this|before it'?s too late|secret to|insane|shocking|destroyed|exposed|here'?s why|this is why|the real reason|nobody (?:tells|told)|i (?:bought|tested|quit)|went wrong)\b|\.\.\.\s*$|\?\s*$|\?!|!\?)/i;
   function isVagueClickbaitTitle(title) {
     if (!title) return false;
     if (VAGUE_TITLE_RE.test(title)) return true;
@@ -835,7 +835,10 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     try {
       const res = await chrome.runtime.sendMessage({
         type: "RESOLVE_DEARROW_TITLES",
-        videoIds: [...titleElsByVid.keys()].slice(0, 16)
+        videoIds: [...titleElsByVid.keys()].slice(0, 16),
+        titles: Object.fromEntries(
+          [...titleElsByVid].map(([vid, els]) => [vid, els[0]?.textContent?.trim() ?? ""])
+        )
       });
       if (!isRecord(res) || !isRecord(res.titles)) return;
       for (const [vid, curated] of Object.entries(res.titles)) {
@@ -843,8 +846,9 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         if (!targets || typeof curated !== "string" || !curated) continue;
         const finalTitle = activeConfig?.youtube.calmTitles ? calmTitle(curated) : curated;
         for (const el of targets) {
+          const original = el.textContent?.trim() ?? "";
           el.textContent = finalTitle;
-          el.title = finalTitle;
+          el.title = `Original title: ${original}`;
         }
       }
     } catch {

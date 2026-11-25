@@ -3,7 +3,7 @@ import { isRecord, type FeedItem, type JsonRecord, type SieveConfig } from "../t
 const MAX_BATCH_SIZE = 20;
 const BACKGROUND_TIMEOUT_MS = 6000;
 
-function extractJsonObject(rawInput: string): JsonRecord | null {
+export function extractJsonObject(rawInput: string): JsonRecord | null {
   // qwen3.x may emit reasoning first; drop closed and unterminated <think> blocks.
   const raw = rawInput.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "");
   if (!raw.trim()) return null;
@@ -158,6 +158,24 @@ async function gradeChunk(
   fetchImpl: typeof fetch,
 ): Promise<Map<string, GraderVerdict>> {
   if (config.grader.mode === "off" || items.length === 0) return new Map();
+  const reply = await chatJson(
+    config,
+    `${config.grader.rubric.trim()}\n\n${VERDICT_OUTPUT_INSTRUCTIONS}`,
+    JSON.stringify(items.map(summarizeIndexedItem)),
+    BACKGROUND_TIMEOUT_MS,
+    fetchImpl,
+  );
+  return parseVerdictMap(reply, items.map((item) => item.id));
+}
+
+/** One chat completion against the configured grader; returns the raw reply text. */
+export async function chatJson(
+  config: SieveConfig,
+  system: string,
+  user: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
   if (!config.grader.endpoint || !config.grader.model) {
     throw new Error("Missing grader endpoint or model");
   }
@@ -165,11 +183,8 @@ async function gradeChunk(
     throw new Error("Missing API key");
   }
 
-  const batch = items;
-  const orderedIds = batch.map((item) => item.id);
-
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BACKGROUND_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -198,14 +213,8 @@ async function gradeChunk(
             }
           : {}),
         messages: [
-          {
-            role: "system",
-            content: `${config.grader.rubric.trim()}\n\n${VERDICT_OUTPUT_INSTRUCTIONS}`,
-          },
-          {
-            role: "user",
-            content: JSON.stringify(batch.map(summarizeIndexedItem)),
-          },
+          { role: "system", content: system },
+          { role: "user", content: user },
         ],
       }),
     });
@@ -214,7 +223,7 @@ async function gradeChunk(
       throw new Error(`HTTP ${res.status}`);
     }
     const body: unknown = await res.json();
-    return parseVerdictMap(readFirstChoiceContent(body), orderedIds);
+    return readFirstChoiceContent(body);
   } finally {
     clearTimeout(timer);
   }

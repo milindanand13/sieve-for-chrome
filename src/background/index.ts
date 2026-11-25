@@ -1,5 +1,6 @@
 import { clearDeArrowCache, lookupDeArrowTitles } from "../core/dearrow.js";
 import { gradeItemsBatch } from "../core/llm.js";
+import { extractShortDescription, writePlainTitles, type TitleJob } from "../core/plain-titles.js";
 import { runSieveDetailed } from "../core/sieve.js";
 import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
 import {
@@ -250,6 +251,48 @@ async function evaluate(
   return dropped;
 }
 
+// ---- Plain titles for bait YouTube titles DeArrow has no fix for. Cached for good per video.
+const PLAIN_TITLES_KEY = "sievePlainTitles";
+const PLAIN_TITLES_CAP = 3000;
+
+async function plainTitlesFor(wanted: Array<{ id: string; title: string }>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (wanted.length === 0 || config.grader.mode === "off") return out;
+  const stored = (await chrome.storage.local.get(PLAIN_TITLES_KEY))[PLAIN_TITLES_KEY];
+  const cache: Record<string, string> = isRecord(stored) ? (stored as Record<string, string>) : {};
+  const todo = wanted.filter((w) => {
+    if (typeof cache[w.id] !== "string") return true;
+    if (cache[w.id]) out.set(w.id, cache[w.id]!); // "" = tried, nothing better
+    return false;
+  });
+  if (todo.length === 0) return out;
+  const jobs: TitleJob[] = [];
+  for (let i = 0; i < todo.length; i += 4) {
+    await Promise.all(
+      todo.slice(i, i + 4).map(async (w) => {
+        try {
+          const res = await fetch(`https://www.youtube.com/watch?v=${w.id}`, { credentials: "omit" });
+          if (res.ok) jobs.push({ ...w, desc: extractShortDescription(await res.text()) });
+        } catch {
+          // Page unreachable: the original title stays.
+        }
+      }),
+    );
+  }
+  let written = new Map<string, string>();
+  try {
+    written = await writePlainTitles(jobs, config);
+  } catch {
+    return out; // model down: try again on a later visit
+  }
+  for (const job of jobs) cache[job.id] = written.get(job.id) ?? "";
+  for (const [id, t] of written) out.set(id, t);
+  const keys = Object.keys(cache);
+  for (const k of keys.slice(0, Math.max(0, keys.length - PLAIN_TITLES_CAP))) delete cache[k];
+  await chrome.storage.local.set({ [PLAIN_TITLES_KEY]: cache });
+  return out;
+}
+
 function targetOf(sender: chrome.runtime.MessageSender) {
   return sender.tab?.id === undefined ? undefined : { tabId: sender.tab.id, frameId: sender.frameId ?? 0 };
 }
@@ -371,12 +414,16 @@ function handle(
     if (!config.enabled || !config.youtube.enabled || !config.youtube.dearrowTitles) {
       return Promise.resolve({ titles: {} } satisfies ResolveDearrowTitlesResponse);
     }
-    const videoIds = raw.videoIds.filter((id): id is string => typeof id === "string");
-    return lookupDeArrowTitles(videoIds).then(
-      (map): ResolveDearrowTitlesResponse => ({
-        titles: Object.fromEntries(map),
-      }),
-    );
+    const videoIds = raw.videoIds.filter((id): id is string => typeof id === "string" && /^[\w-]{11}$/.test(id));
+    const rawTitles = isRecord(raw.titles) ? raw.titles : {};
+    return lookupDeArrowTitles(videoIds).then(async (map): Promise<ResolveDearrowTitlesResponse> => {
+      // No community title: write a plain one from the creator's description.
+      const missing = videoIds.filter((id) => !map.has(id) && typeof rawTitles[id] === "string");
+      for (const [id, t] of await plainTitlesFor(missing.map((id) => ({ id, title: String(rawTitles[id]) })))) {
+        map.set(id, t);
+      }
+      return { titles: Object.fromEntries(map) };
+    });
   }
 
   if (raw.type === "EVALUATE_SSR_ITEMS" && Array.isArray(raw.items)) {
