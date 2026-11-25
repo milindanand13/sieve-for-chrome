@@ -24,7 +24,7 @@ Each post goes down a checklist, and the first rule with an answer wins:
 1. Your own 👍 or 👎 on that post. Final.
 2. Ads and sponsored posts. Always out.
 3. Creators you set to always keep or always dim.
-4. Videos and channels shared on Hacker News, from [HackerTube](https://hackertube.org). Kept.
+4. Videos and channels shared on Hacker News, from Andrej Karpathy's [HackerTube](https://hackertube.org). Kept.
 5. About 58,000 channels on a public list of AI-generated junk ([AiSList](https://github.com/Override92/AiSList)). Dimmed.
 6. Wording that gives bait away: "comment X and I'll DM you the link", crypto casino codes, short-drama episodes, siren-emoji fake breaking news, gossip.
 7. On X and Instagram, the rhythm of engagement farming. On X, a repeat of a story you already read is dimmed as "seen before".
