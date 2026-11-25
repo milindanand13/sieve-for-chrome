@@ -14,6 +14,12 @@ import {
   rememberDim,
 } from "./shared.js";
 
+// YouTube's newer card layout (yt-lockup-view-model) uses camelCase class names; keep the old ones too.
+const TITLE_SEL = "#video-title, .ytLockupMetadataViewModelTitle, .yt-lockup-metadata-view-model__title";
+// Sidebar cards on watch pages are bare lockups; home-feed lockups sit inside ytd-rich-item-renderer.
+const BARE_LOCKUP = "yt-lockup-view-model:not(ytd-rich-item-renderer yt-lockup-view-model)";
+const CARD_SEL = `ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer, ${BARE_LOCKUP}`;
+
 const AI_BUTTON_RE = /\bgemini\b|\bask\s+youtube\b|\bsearch\s+with\s+ai\b|\bask\s+ai\b|^ask$/i;
 
 let activeConfig: SieveConfig | null = null;
@@ -31,7 +37,7 @@ async function resolveVagueDomTitles(): Promise<void> {
   const titleElsByVid = new Map<string, HTMLElement[]>();
   document
     .querySelectorAll<HTMLElement>(
-      "ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer",
+      CARD_SEL,
     )
     .forEach((card) => {
       const link = card.querySelector<HTMLAnchorElement>('a[href*="/watch?v="]');
@@ -47,7 +53,7 @@ async function resolveVagueDomTitles(): Promise<void> {
       if (titleElsByVid.size >= 16 && !titleElsByVid.has(vid)) return;
 
       const titleEl = card.querySelector<HTMLElement>(
-        "#video-title, .yt-lockup-metadata-view-model__title",
+        TITLE_SEL,
       );
       const raw = titleEl?.textContent?.trim() ?? "";
       if (!titleEl || !raw || !rememberBounded(dearrowCheckedVideos, vid)) return;
@@ -122,7 +128,7 @@ async function evaluateUnfilteredDomCards(): Promise<void> {
   if (isYouTubeSafeRoute(window.location.href)) return;
 
   const cards = document.querySelectorAll<HTMLElement>(
-    "ytd-rich-item-renderer, ytd-compact-video-renderer",
+    `ytd-rich-item-renderer, ytd-compact-video-renderer, ${BARE_LOCKUP}`,
   );
   const batch: FeedItem[] = [];
   const cardById = new Map<string, HTMLElement>();
@@ -138,7 +144,7 @@ async function evaluateUnfilteredDomCards(): Promise<void> {
     }
     if (!vid || card.dataset.sieveSeen === vid || evaluatedDomVideos.has(vid)) return;
     const titleEl = card.querySelector<HTMLElement>(
-      "#video-title, .yt-lockup-metadata-view-model__title, h3",
+      `${TITLE_SEL}, h3`,
     );
     const title = titleEl?.textContent?.trim() ?? "";
     if (!title || !rememberBounded(evaluatedDomVideos, vid)) return;
@@ -214,7 +220,7 @@ function polishRenderedCards(): void {
   if (activeConfig.youtube.calmTitles) {
     document
       .querySelectorAll<HTMLElement>(
-        "#video-title:not([data-sieve-calm]), .yt-lockup-metadata-view-model__title:not([data-sieve-calm])",
+        TITLE_SEL.split(", ").map((sel) => `${sel}:not([data-sieve-calm])`).join(", "),
       )
       .forEach((el) => {
         el.dataset.sieveCalm = "1";
@@ -255,10 +261,10 @@ function youtubeVideoId(card: HTMLElement): string {
 }
 
 installDimMarker({
-  cardSelector: "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",
+  cardSelector: CARD_SEL,
   cards: () =>
     document.querySelectorAll<HTMLElement>(
-      "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",
+      CARD_SEL,
     ),
   idsOf: (card) => [youtubeVideoId(card)],
 });

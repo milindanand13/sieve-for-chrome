@@ -798,6 +798,9 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   }
 
   // src/content/youtube.ts
+  var TITLE_SEL = "#video-title, .ytLockupMetadataViewModelTitle, .yt-lockup-metadata-view-model__title";
+  var BARE_LOCKUP = "yt-lockup-view-model:not(ytd-rich-item-renderer yt-lockup-view-model)";
+  var CARD_SEL = `ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer, ${BARE_LOCKUP}`;
   var AI_BUTTON_RE = /\bgemini\b|\bask\s+youtube\b|\bsearch\s+with\s+ai\b|\bask\s+ai\b|^ask$/i;
   var activeConfig = null;
   var evaluatedDomVideos = /* @__PURE__ */ new Set();
@@ -810,7 +813,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     }
     const titleElsByVid = /* @__PURE__ */ new Map();
     document.querySelectorAll(
-      "ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer"
+      CARD_SEL
     ).forEach((card) => {
       const link = card.querySelector('a[href*="/watch?v="]');
       if (!link) return;
@@ -823,7 +826,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       if (!vid || dearrowCheckedVideos.has(vid)) return;
       if (titleElsByVid.size >= 16 && !titleElsByVid.has(vid)) return;
       const titleEl = card.querySelector(
-        "#video-title, .yt-lockup-metadata-view-model__title"
+        TITLE_SEL
       );
       const raw = titleEl?.textContent?.trim() ?? "";
       if (!titleEl || !raw || !rememberBounded(dearrowCheckedVideos, vid)) return;
@@ -886,7 +889,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     }
     if (isYouTubeSafeRoute(window.location.href)) return;
     const cards = document.querySelectorAll(
-      "ytd-rich-item-renderer, ytd-compact-video-renderer"
+      `ytd-rich-item-renderer, ytd-compact-video-renderer, ${BARE_LOCKUP}`
     );
     const batch = [];
     const cardById = /* @__PURE__ */ new Map();
@@ -901,7 +904,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       }
       if (!vid || card.dataset.sieveSeen === vid || evaluatedDomVideos.has(vid)) return;
       const titleEl = card.querySelector(
-        "#video-title, .yt-lockup-metadata-view-model__title, h3"
+        `${TITLE_SEL}, h3`
       );
       const title = titleEl?.textContent?.trim() ?? "";
       if (!title || !rememberBounded(evaluatedDomVideos, vid)) return;
@@ -959,7 +962,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     }
     if (activeConfig.youtube.calmTitles) {
       document.querySelectorAll(
-        "#video-title:not([data-sieve-calm]), .yt-lockup-metadata-view-model__title:not([data-sieve-calm])"
+        TITLE_SEL.split(", ").map((sel) => `${sel}:not([data-sieve-calm])`).join(", ")
       ).forEach((el) => {
         el.dataset.sieveCalm = "1";
         const raw = el.textContent;
@@ -992,9 +995,9 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     }
   }
   installDimMarker({
-    cardSelector: "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer",
+    cardSelector: CARD_SEL,
     cards: () => document.querySelectorAll(
-      "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
+      CARD_SEL
     ),
     idsOf: (card) => [youtubeVideoId(card)]
   });
