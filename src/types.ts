@@ -1,4 +1,4 @@
-export type Platform = "youtube" | "x" | "instagram" | "tiktok";
+export type Platform = "youtube" | "x" | "instagram";
 
 export type FeedSurface = "home" | "search" | "watch_next" | "timeline" | "reels";
 
@@ -43,13 +43,6 @@ interface InstagramSettings {
   hideClutter: boolean;
 }
 
-interface TikTokSettings {
-  enabled: boolean;
-  caliberFilter: boolean;
-  cleanChrome: boolean;
-  lightMode: boolean;
-  postOnlyMode: boolean;
-}
 
 export interface GraderSettings {
   mode: GraderMode;
@@ -78,7 +71,6 @@ export interface SieveConfig {
   youtube: YouTubeSettings;
   x: TwitterSettings;
   instagram: InstagramSettings;
-  tiktok: TikTokSettings;
   grader: GraderSettings;
   display: DisplaySettings;
   recorder: RecorderSettings;

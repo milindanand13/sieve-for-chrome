@@ -51,19 +51,21 @@ Upstream Submodules, Datasets, and Attributions
    (CC BY-SA 4.0): https://creativecommons.org/licenses/by-sa/4.0/
    Queried via k-anonymous 4-character SHA-256 hash prefixes against the public
    read-only mirror (https://dearrow.minibomba.pro/sbserver/).
+   Community-picked thumbnail frames are loaded from https://dearrow-thumb.ajay.app.
 
-4. Control Panel for Twitter (vendor/control-panel-for-twitter -
-   https://github.com/insin/control-panel-for-twitter)
+4. Control Panel for Twitter (https://github.com/insin/control-panel-for-twitter), credited by the
+   original Sieve
    Copyright (c) Jonathan Buchanan (insin). Licensed under the MIT License.
 
-5. Slop Filter for X (vendor/slop-filter-for-x -
-   https://github.com/midego1/slop-filter-for-x)
+5. Slop Filter for X (https://github.com/midego1/slop-filter-for-x), credited by the
+   original Sieve
    Licensed under the MIT License.
 
-6. FocusTube (vendor/FocusTube - https://github.com/malekwael229/FocusTube)
+6. FocusTube (https://github.com/malekwael229/FocusTube), credited by
+   the original Sieve
    Copyright (c) Malek Wael. Licensed under the MIT License.
 
-7. xrai / rai (vendor/xrai - https://github.com/phuaky/xrai)
+7. xrai / rai (https://github.com/phuaky/xrai), credited by the original Sieve
    Licensed under the MIT License.
 
 8. JetBrains Mono (https://www.jetbrains.com/lp/mono/)

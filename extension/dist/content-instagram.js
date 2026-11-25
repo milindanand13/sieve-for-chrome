@@ -297,13 +297,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       filterReels: true,
       hideClutter: true
     },
-    tiktok: {
-      enabled: false,
-      caliberFilter: true,
-      cleanChrome: true,
-      lightMode: true,
-      postOnlyMode: false
-    },
     grader: {
       mode: "local",
       endpoint: LOCAL_DEFAULT_ENDPOINT,
@@ -330,7 +323,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const yt = isRecord(stored.youtube) ? stored.youtube : {};
     const x = isRecord(stored.x) ? stored.x : {};
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
-    const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
@@ -365,13 +357,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         caliberFilter: bool(ig, "caliberFilter", d.instagram.caliberFilter),
         filterReels: bool(ig, "filterReels", d.instagram.filterReels),
         hideClutter: bool(ig, "hideClutter", d.instagram.hideClutter)
-      },
-      tiktok: {
-        enabled: bool(tt, "enabled", d.tiktok.enabled),
-        caliberFilter: bool(tt, "caliberFilter", d.tiktok.caliberFilter),
-        cleanChrome: bool(tt, "cleanChrome", d.tiktok.cleanChrome),
-        lightMode: bool(tt, "lightMode", d.tiktok.lightMode),
-        postOnlyMode: bool(tt, "postOnlyMode", d.tiktok.postOnlyMode)
       },
       grader: {
         mode,
@@ -711,23 +696,34 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       });
     };
   }
-  async function evaluateDomBatch(items, onDrop) {
-    if (items.length === 0) return;
+  var DOM_BATCH_MS = 500;
+  var DOM_BATCH_MAX = 20;
+  var pendingDom = [];
+  var domTimer;
+  async function flushDomBatch() {
+    if (domTimer) clearTimeout(domTimer);
+    domTimer = void 0;
+    const queued = pendingDom.splice(0);
+    if (queued.length === 0) return;
     try {
       const res = await chrome.runtime.sendMessage({
         type: "EVALUATE_SSR_ITEMS",
-        items
+        items: queued.map((q) => q.item)
       });
       if (!isRecord(res) || !Array.isArray(res.dropped)) return;
       const reasons = isRecord(res.reasons) ? res.reasons : {};
       for (const id of res.dropped) {
-        if (typeof id === "string") {
-          const r = reasons[id];
-          onDrop(id, typeof r === "string" ? r : "dropped");
-        }
+        if (typeof id !== "string") continue;
+        const r = reasons[id];
+        for (const q of queued) if (q.item.id === id) q.onDrop(id, typeof r === "string" ? r : "dropped");
       }
     } catch {
     }
+  }
+  async function evaluateDomBatch(items, onDrop) {
+    for (const item of items) pendingDom.push({ item, onDrop });
+    if (pendingDom.length >= DOM_BATCH_MAX) await flushDomBatch();
+    else if (pendingDom.length > 0) domTimer ??= setTimeout(() => void flushDomBatch(), DOM_BATCH_MS);
   }
   function pauseAllMedia(root = document) {
     root.querySelectorAll("video, audio").forEach((el) => {

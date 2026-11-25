@@ -28,7 +28,8 @@ async function main() {
         bundle: true,
         format: "iife",
         target: ["chrome120"],
-        minify: false,
+        // Only the background carries the Claude SDK (~1.2 MB unminified); page scripts stay readable.
+        minify: output === "background.js",
         legalComments: "none",
       }),
     ),

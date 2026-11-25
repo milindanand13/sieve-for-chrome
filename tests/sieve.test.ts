@@ -43,6 +43,13 @@ describe("evaluateLocalTiers", () => {
     expect(evaluateLocalTiers(fine, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("uncertain");
   });
 
+  it("keeps real trailers but not AI concept trailers", () => {
+    const yt = (id: string, titleOrText: string): FeedItem => ({ platform: "youtube", id, surface: "home", creatorHandle: "studio", titleOrText });
+    expect(evaluateLocalTiers(yt("t1", "Panchayat Season 5 - Official Trailer"), DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("keep");
+    expect(evaluateLocalTiers(yt("t2", "Avengers 7 Teaser Trailer (2027) Concept"), DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("uncertain");
+    expect(evaluateLocalTiers(yt("t3", "Superman 2 Trailer | AI Fan Made"), DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("uncertain");
+  });
+
   it("sends followed creators to the grader instead of passing them", () => {
     const item: FeedItem = {
       platform: "instagram",
@@ -110,7 +117,7 @@ describe("evaluateLocalTiers", () => {
     expect(evaluateLocalTiers(ragebait, DEFAULT_CONFIG, makeSeeds(), emptyMemory)).toBe("drop");
   });
 
-  it("drops IG and TikTok comment-bait DM templates from unfollowed accounts", () => {
+  it("drops IG comment-bait DM templates from unfollowed accounts", () => {
     const bait: FeedItem = {
       platform: "instagram",
       id: "reel_bait",
@@ -196,7 +203,7 @@ describe("evaluateLocalTiers", () => {
       titleOrText: "10 AI websites that feel illegal to know (bookmark this before it gets deleted):",
     };
     const shortDrama: FeedItem = {
-      platform: "tiktok",
+      platform: "instagram",
       id: "drama_3",
       creatorHandle: "muffindrama_us",
       isFollowed: false,

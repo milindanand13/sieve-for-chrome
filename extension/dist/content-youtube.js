@@ -330,13 +330,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       filterReels: true,
       hideClutter: true
     },
-    tiktok: {
-      enabled: false,
-      caliberFilter: true,
-      cleanChrome: true,
-      lightMode: true,
-      postOnlyMode: false
-    },
     grader: {
       mode: "local",
       endpoint: LOCAL_DEFAULT_ENDPOINT,
@@ -363,7 +356,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const yt = isRecord(stored.youtube) ? stored.youtube : {};
     const x = isRecord(stored.x) ? stored.x : {};
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
-    const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
@@ -398,13 +390,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         caliberFilter: bool(ig, "caliberFilter", d.instagram.caliberFilter),
         filterReels: bool(ig, "filterReels", d.instagram.filterReels),
         hideClutter: bool(ig, "hideClutter", d.instagram.hideClutter)
-      },
-      tiktok: {
-        enabled: bool(tt, "enabled", d.tiktok.enabled),
-        caliberFilter: bool(tt, "caliberFilter", d.tiktok.caliberFilter),
-        cleanChrome: bool(tt, "cleanChrome", d.tiktok.cleanChrome),
-        lightMode: bool(tt, "lightMode", d.tiktok.lightMode),
-        postOnlyMode: bool(tt, "postOnlyMode", d.tiktok.postOnlyMode)
       },
       grader: {
         mode,
@@ -744,23 +729,34 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       });
     };
   }
-  async function evaluateDomBatch(items, onDrop) {
-    if (items.length === 0) return;
+  var DOM_BATCH_MS = 500;
+  var DOM_BATCH_MAX = 20;
+  var pendingDom = [];
+  var domTimer;
+  async function flushDomBatch() {
+    if (domTimer) clearTimeout(domTimer);
+    domTimer = void 0;
+    const queued = pendingDom.splice(0);
+    if (queued.length === 0) return;
     try {
       const res = await chrome.runtime.sendMessage({
         type: "EVALUATE_SSR_ITEMS",
-        items
+        items: queued.map((q) => q.item)
       });
       if (!isRecord(res) || !Array.isArray(res.dropped)) return;
       const reasons = isRecord(res.reasons) ? res.reasons : {};
       for (const id of res.dropped) {
-        if (typeof id === "string") {
-          const r = reasons[id];
-          onDrop(id, typeof r === "string" ? r : "dropped");
-        }
+        if (typeof id !== "string") continue;
+        const r = reasons[id];
+        for (const q of queued) if (q.item.id === id) q.onDrop(id, typeof r === "string" ? r : "dropped");
       }
     } catch {
     }
+  }
+  async function evaluateDomBatch(items, onDrop) {
+    for (const item of items) pendingDom.push({ item, onDrop });
+    if (pendingDom.length >= DOM_BATCH_MAX) await flushDomBatch();
+    else if (pendingDom.length > 0) domTimer ??= setTimeout(() => void flushDomBatch(), DOM_BATCH_MS);
   }
   function installMidFrameThumbFallback() {
     document.addEventListener(
@@ -772,9 +768,11 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
           target.src = target.dataset.sieveOrigSrc;
           return;
         }
-        if (target.src.includes("/hq2.jpg") && !target.dataset.sieveFallback) {
-          target.dataset.sieveFallback = "1";
-          target.src = target.src.replace("/hq2.jpg", "/hqdefault.jpg");
+        if (target.src.includes("/hq2.jpg")) {
+          const back = target.src.replace("/hq2.jpg", "/hqdefault.jpg");
+          if (target.dataset.sieveFallback === back) return;
+          target.dataset.sieveFallback = back;
+          target.src = back;
         }
       },
       true
@@ -833,14 +831,16 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
   var dearrowCheckedVideos = /* @__PURE__ */ new Set();
   var dearrowThumbs = /* @__PURE__ */ new Map();
   var thumbRequestInFlight = false;
+  var vidOf = (img) => /ytimg\.com\/vi(?:_webp)?\/([\w-]{11})\//.exec(img.src)?.[1] ?? "";
   async function applyDeArrowThumbs() {
     if (!activeConfig?.enabled || !activeConfig.youtube.enabled || !activeConfig.youtube.midFrameThumbs) return;
-    const imgs = [...document.querySelectorAll('img[src*="ytimg.com/vi/"]:not([data-sieve-dearrow])')];
-    const vidOf = (img) => /ytimg\.com\/vi(?:_webp)?\/([\w-]{11})\//.exec(img.src)?.[1] ?? "";
+    const imgs = [...document.querySelectorAll('img[src*="ytimg.com/vi"]')].filter(
+      (img) => img.dataset.sieveDearrow !== vidOf(img)
+    );
     for (const img of imgs) {
       const url = dearrowThumbs.get(vidOf(img));
       if (url === void 0) continue;
-      img.dataset.sieveDearrow = "1";
+      img.dataset.sieveDearrow = vidOf(img);
       if (url) {
         img.dataset.sieveOrigSrc = img.src;
         img.removeAttribute("srcset");
@@ -1011,8 +1011,9 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     syncTheaterHeaderTheme();
     if (!activeConfig?.enabled || !activeConfig.youtube.enabled) return;
     if (activeConfig.youtube.midFrameThumbs) {
-      document.querySelectorAll('img[src*="ytimg.com/vi"]:not([data-sieve-thumb])').forEach((img) => {
-        img.dataset.sieveThumb = "1";
+      document.querySelectorAll('img[src*="ytimg.com/vi"]').forEach((img) => {
+        if (img.dataset.sieveThumb === img.src || img.dataset.sieveFallback === img.src) return;
+        img.dataset.sieveThumb = img.src;
         if (img.src.includes("/hq2.jpg")) return;
         const next = midFrameThumbUrl(img.src);
         if (next !== img.src) img.src = next;

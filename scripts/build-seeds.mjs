@@ -12,7 +12,8 @@ const submoduleAisWarn = path.join(rootDir, "vendor", "AiSList", "AiSList", "ais
 const KAGI_SMALLYT_URL = "https://raw.githubusercontent.com/kagisearch/smallweb/main/smallyt.txt";
 // Wikidata (CC0): YouTube channel IDs (P2397) of people whose occupation is photographer, filmmaker,
 // animator, film director, painter, sculptor, graphic designer or architect.
-const WIKIDATA_QUERY = `SELECT ?yt WHERE { VALUES ?occ {wd:Q33231 wd:Q1414443 wd:Q266569 wd:Q2526255 wd:Q1028181 wd:Q1281618 wd:Q627325 wd:Q42973} ?p wdt:P106 ?occ; wdt:P2397 ?yt }`;
+// Both the channel ID (P2397) and the @handle (P11245): cards read off the page usually only show the handle.
+const WIKIDATA_QUERY = `SELECT ?yt WHERE { VALUES ?occ {wd:Q33231 wd:Q1414443 wd:Q266569 wd:Q2526255 wd:Q1028181 wd:Q1281618 wd:Q627325 wd:Q42973} VALUES ?prop {wdt:P2397 wdt:P11245} ?p wdt:P106 ?occ; ?prop ?yt }`;
 const WIKIDATA_URL = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(WIKIDATA_QUERY)}`;
 
 const HACKERTUBE_VIDEOS_URL = "https://hackertube.org/download/videos.jsonl";
@@ -73,7 +74,7 @@ async function main() {
   }
 
   let wikidataCount = 0;
-  for (const m of wikidataRaw.matchAll(/"value"\s*:\s*"(UC[\w-]{22})"/g)) {
+  for (const m of wikidataRaw.matchAll(/"value"\s*:\s*"(UC[\w-]{22}|[\w.-]{3,40})"/g)) {
     const key = normKey(m[1]);
     if (!hnChannels.has(key)) wikidataCount++;
     hnChannels.add(key);

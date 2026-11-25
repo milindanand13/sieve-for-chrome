@@ -281,14 +281,12 @@ describe("stats", () => {
 });
 
 describe("defaults and rubric", () => {
-  it("ships tiktok off and local qwen3.5:4b on Ollama", () => {
-    expect(DEFAULT_CONFIG.tiktok.enabled).toBe(false);
+  it("ships local qwen3.5:4b on Ollama", () => {
     expect(DEFAULT_CONFIG.grader.mode).toBe("local");
     expect(DEFAULT_CONFIG.grader.model).toBe("qwen3.5:4b");
     expect(DEFAULT_CONFIG.grader.endpoint).toBe("http://127.0.0.1:11434/v1/chat/completions");
     expect(DEFAULT_CONFIG.display.hideDropped).toBe(false);
     expect(DEFAULT_CONFIG.recorder.enabled).toBe(false);
-    expect(mergeConfig({}).tiktok.enabled).toBe(false);
   });
 
   it("default rubric keeps creative work and stays neutral (personal taste goes in About you)", () => {

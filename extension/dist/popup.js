@@ -64,13 +64,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       filterReels: true,
       hideClutter: true
     },
-    tiktok: {
-      enabled: false,
-      caliberFilter: true,
-      cleanChrome: true,
-      lightMode: true,
-      postOnlyMode: false
-    },
     grader: {
       mode: "local",
       endpoint: LOCAL_DEFAULT_ENDPOINT,
@@ -97,7 +90,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const yt = isRecord(stored.youtube) ? stored.youtube : {};
     const x = isRecord(stored.x) ? stored.x : {};
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
-    const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
@@ -132,13 +124,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         caliberFilter: bool(ig, "caliberFilter", d.instagram.caliberFilter),
         filterReels: bool(ig, "filterReels", d.instagram.filterReels),
         hideClutter: bool(ig, "hideClutter", d.instagram.hideClutter)
-      },
-      tiktok: {
-        enabled: bool(tt, "enabled", d.tiktok.enabled),
-        caliberFilter: bool(tt, "caliberFilter", d.tiktok.caliberFilter),
-        cleanChrome: bool(tt, "cleanChrome", d.tiktok.cleanChrome),
-        lightMode: bool(tt, "lightMode", d.tiktok.lightMode),
-        postOnlyMode: bool(tt, "postOnlyMode", d.tiktok.postOnlyMode)
       },
       grader: {
         mode,

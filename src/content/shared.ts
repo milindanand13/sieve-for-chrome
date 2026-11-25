@@ -356,27 +356,43 @@ export function createRafScheduler(run: () => void): () => void {
   };
 }
 
-export async function evaluateDomBatch(
-  items: FeedItem[],
-  onDrop: (id: string, reason: string) => void,
-): Promise<void> {
-  if (items.length === 0) return;
+// Posts read off the page arrive a few at a time as the page draws. Collect them briefly so the
+// grader gets one batch (one copy of the taste text) instead of a request per redraw.
+const DOM_BATCH_MS = 500;
+const DOM_BATCH_MAX = 20;
+const pendingDom: Array<{ item: FeedItem; onDrop: (id: string, reason: string) => void }> = [];
+let domTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function flushDomBatch(): Promise<void> {
+  if (domTimer) clearTimeout(domTimer);
+  domTimer = undefined;
+  const queued = pendingDom.splice(0);
+  if (queued.length === 0) return;
   try {
     const res: unknown = await chrome.runtime.sendMessage({
       type: "EVALUATE_SSR_ITEMS",
-      items,
+      items: queued.map((q) => q.item),
     });
     if (!isRecord(res) || !Array.isArray(res.dropped)) return;
     const reasons = isRecord(res.reasons) ? res.reasons : {};
     for (const id of res.dropped) {
-      if (typeof id === "string") {
-        const r = reasons[id];
-        onDrop(id, typeof r === "string" ? r : "dropped");
-      }
+      if (typeof id !== "string") continue;
+      const r = reasons[id];
+      for (const q of queued) if (q.item.id === id) q.onDrop(id, typeof r === "string" ? r : "dropped");
     }
   } catch {
     // Background reload fails open without hiding cards.
   }
+}
+
+/** Queues posts for grading; they are sent together within half a second. */
+export async function evaluateDomBatch(
+  items: FeedItem[],
+  onDrop: (id: string, reason: string) => void,
+): Promise<void> {
+  for (const item of items) pendingDom.push({ item, onDrop });
+  if (pendingDom.length >= DOM_BATCH_MAX) await flushDomBatch();
+  else if (pendingDom.length > 0) domTimer ??= setTimeout(() => void flushDomBatch(), DOM_BATCH_MS);
 }
 
 export function installMidFrameThumbFallback(): void {
@@ -390,9 +406,11 @@ export function installMidFrameThumbFallback(): void {
         target.src = target.dataset.sieveOrigSrc;
         return;
       }
-      if (target.src.includes("/hq2.jpg") && !target.dataset.sieveFallback) {
-        target.dataset.sieveFallback = "1";
-        target.src = target.src.replace("/hq2.jpg", "/hqdefault.jpg");
+      if (target.src.includes("/hq2.jpg")) {
+        const back = target.src.replace("/hq2.jpg", "/hqdefault.jpg");
+        if (target.dataset.sieveFallback === back) return;
+        target.dataset.sieveFallback = back; // the YouTube script skips this src, so no swap loop
+        target.src = back;
       }
     },
     true,

@@ -1,6 +1,7 @@
 import { clearDeArrowCache, lookupDeArrowThumbs, lookupDeArrowTitles } from "../core/dearrow.js";
 import { gradeItemsBatch } from "../core/llm.js";
 import { extractShortDescription, writePlainTitles, type TitleJob } from "../core/plain-titles.js";
+import { dislikeHint } from "../core/dislikes.js";
 import { runSieveDetailed } from "../core/sieve.js";
 import { DEFAULT_CONFIG, mergeConfig } from "../defaults.js";
 import {
@@ -120,7 +121,7 @@ const FEEDBACK_KEY = "sieveFeedback";
 const FEEDBACK_CAP = 500; // all kept; pickExamples sends the grader the 30 most relevant
 const RECENT_CAP = 3000;
 const recentItems = new Map<string, FeedItem>();
-const PLATFORMS = ["youtube", "x", "instagram", "tiktok"];
+const PLATFORMS = ["youtube", "x", "instagram"];
 const FEEDBACK_ACTIONS = ["keep", "drop", "keepCreator", "dropCreator"];
 
 function parseFeedback(raw: unknown): FeedbackEntry[] {
@@ -308,37 +309,33 @@ let dislikeBackoffUntil = 0;
 let dislikeWindowStart = 0;
 let dislikeWindowCount = 0;
 
-async function withDislikeHints(items: FeedItem[]): Promise<FeedItem[]> {
-  const out: FeedItem[] = [];
-  for (const item of items) {
-    if (item.platform !== "youtube" || !/^[\w-]{11}$/.test(item.id)) {
-      out.push(item);
-      continue;
-    }
-    if (!dislikeHints.has(item.id) && Date.now() > dislikeBackoffUntil) {
-      if (Date.now() - dislikeWindowStart > 60_000) (dislikeWindowStart = Date.now()), (dislikeWindowCount = 0);
-      // shortcut: per-minute cap only (60 < 100); the daily 10,000 is far above one person's scrolling.
-      if (dislikeWindowCount++ < 60) {
-        try {
-          const res = await fetch(`https://returnyoutubedislikeapi.com/votes?videoId=${item.id}`, {
-            credentials: "omit",
-            signal: AbortSignal.timeout(1500),
-          });
-          if (res.status === 429) dislikeBackoffUntil = Date.now() + 10 * 60_000;
-          const v: unknown = res.ok ? await res.json() : null;
-          const likes = isRecord(v) && typeof v.likes === "number" ? v.likes : 0;
-          const dislikes = isRecord(v) && typeof v.dislikes === "number" ? v.dislikes : 0;
-          const share = likes + dislikes >= 200 ? dislikes / (likes + dislikes) : 0;
-          if (res.ok) dislikeHints.set(item.id, share >= 0.2 ? `${Math.round(share * 100)}% of votes are dislikes` : "");
-        } catch {
-          // Unreachable or slow: grade without the hint.
-        }
-      }
-    }
-    const hint = dislikeHints.get(item.id);
-    out.push(hint ? { ...item, secondaryText: [item.secondaryText, hint].filter(Boolean).join(" · ") } : item);
+async function fetchDislikeHint(id: string): Promise<void> {
+  if (dislikeHints.has(id) || Date.now() < dislikeBackoffUntil) return;
+  if (Date.now() - dislikeWindowStart > 60_000) (dislikeWindowStart = Date.now()), (dislikeWindowCount = 0);
+  // shortcut: per-minute cap only (60 < 100); the daily 10,000 is far above one person's scrolling.
+  if (dislikeWindowCount++ >= 60) return;
+  try {
+    const res = await fetch(`https://returnyoutubedislikeapi.com/votes?videoId=${id}`, {
+      credentials: "omit",
+      signal: AbortSignal.timeout(1500),
+    });
+    if (res.status === 429) dislikeBackoffUntil = Date.now() + 10 * 60_000;
+    if (!res.ok) return;
+    const v: unknown = await res.json();
+    const num = (k: string): number => (isRecord(v) && typeof v[k] === "number" ? (v[k] as number) : 0);
+    dislikeHints.set(id, dislikeHint(num("likes"), num("dislikes")));
+  } catch {
+    // Unreachable or slow: grade without the hint.
   }
-  return out;
+}
+
+async function withDislikeHints(items: FeedItem[]): Promise<FeedItem[]> {
+  const ids = items.filter((i) => i.platform === "youtube" && /^[\w-]{11}$/.test(i.id)).map((i) => i.id);
+  await Promise.all(ids.map(fetchDislikeHint)); // all at once: at most one 1.5s wait, not one per video
+  return items.map((item) => {
+    const hint = item.platform === "youtube" ? dislikeHints.get(item.id) : "";
+    return hint ? { ...item, secondaryText: [item.secondaryText, hint].filter(Boolean).join(" · ") } : item;
+  });
 }
 
 function targetOf(sender: chrome.runtime.MessageSender) {

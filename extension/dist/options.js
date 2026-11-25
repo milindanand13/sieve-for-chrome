@@ -70,13 +70,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       filterReels: true,
       hideClutter: true
     },
-    tiktok: {
-      enabled: false,
-      caliberFilter: true,
-      cleanChrome: true,
-      lightMode: true,
-      postOnlyMode: false
-    },
     grader: {
       mode: "local",
       endpoint: LOCAL_DEFAULT_ENDPOINT,
@@ -103,7 +96,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
     const yt = isRecord(stored.youtube) ? stored.youtube : {};
     const x = isRecord(stored.x) ? stored.x : {};
     const ig = isRecord(stored.instagram) ? stored.instagram : {};
-    const tt = isRecord(stored.tiktok) ? stored.tiktok : {};
     const gr = isRecord(stored.grader) ? stored.grader : {};
     const disp = isRecord(stored.display) ? stored.display : {};
     const rec = isRecord(stored.recorder) ? stored.recorder : {};
@@ -138,13 +130,6 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         caliberFilter: bool(ig, "caliberFilter", d.instagram.caliberFilter),
         filterReels: bool(ig, "filterReels", d.instagram.filterReels),
         hideClutter: bool(ig, "hideClutter", d.instagram.hideClutter)
-      },
-      tiktok: {
-        enabled: bool(tt, "enabled", d.tiktok.enabled),
-        caliberFilter: bool(tt, "caliberFilter", d.tiktok.caliberFilter),
-        cleanChrome: bool(tt, "cleanChrome", d.tiktok.cleanChrome),
-        lightMode: bool(tt, "lightMode", d.tiktok.lightMode),
-        postOnlyMode: bool(tt, "postOnlyMode", d.tiktok.postOnlyMode)
       },
       grader: {
         mode,
@@ -358,12 +343,13 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       populateFields();
     });
     let saveTimer;
-    function scheduleSave(immediate = false) {
+    let tasteDirty = false;
+    function scheduleSave(immediate = false, commit = immediate) {
       if (saveIndicator) saveIndicator.textContent = "saving...";
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
         const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
-        const rubricChanged = fresh.grader.rubric !== rubricEl.value || fresh.grader.aboutMe !== aboutEl.value;
+        if (fresh.grader.rubric !== rubricEl.value || fresh.grader.aboutMe !== aboutEl.value) tasteDirty = true;
         const config2 = fresh;
         config2.display.hideDropped = hideDroppedEl.checked;
         config2.recorder.enabled = recorderEl.checked;
@@ -383,8 +369,11 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
         config2.blockHandles = parseLines(blockEl.value);
         await chrome.storage.local.set({ sieveConfig: config2 });
         if (saveIndicator) saveIndicator.textContent = "saved locally";
-        if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {
-        });
+        if (commit && tasteDirty) {
+          tasteDirty = false;
+          void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {
+          });
+        }
       }, immediate ? 0 : 180);
     }
     async function ensureEndpointPermission() {
@@ -426,7 +415,7 @@ Drop: engagement farming and viral sludge. Ragebait, culture-war fights, cynical
       blockEl
     ]) {
       el.addEventListener("input", () => scheduleSave());
-      el.addEventListener("change", () => scheduleSave());
+      el.addEventListener("change", () => scheduleSave(false, true));
     }
     document.getElementById("save-rubric")?.addEventListener("click", () => scheduleSave(true));
     document.getElementById("reset-rubric")?.addEventListener("click", () => {

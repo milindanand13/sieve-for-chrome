@@ -30,6 +30,8 @@ const ATTENTION_TRAP_RE =
 
 // Film and TV trailers are kept outright: the small model tends to read actor names as gossip.
 const TRAILER_RE = /\b(?:official\s+)?(?:trailer|teaser)\b/i;
+// Made-up trailers are a known AI-slop genre: those go to the grader like anything else.
+const FAKE_TRAILER_RE = /\b(?:concept|fan[\s-]?made|ai|a\.i\.|fan\s+trailer)\b/i;
 
 const GOSSIP_DOMAIN_RE =
   /\b(?:celebrity|reality\s*tv|k-?pop\s*stan|tabloid|love\s*island|kardashian)\b/i;
@@ -101,7 +103,9 @@ export function evaluateLocalDecision(
   if (ytIds.some((vid) => seeds.hnVideos.has(vid))) return KEEP("hn video link");
 
   if (keys.some((k) => seeds.slopChannels.has(k))) return DROP("slop list");
-  if (item.platform === "youtube" && TRAILER_RE.test(item.titleOrText)) return KEEP("trailer");
+  if (item.platform === "youtube" && TRAILER_RE.test(item.titleOrText) && !FAKE_TRAILER_RE.test(item.titleOrText)) {
+    return KEEP("trailer");
+  }
 
   const fullText = `${item.titleOrText} ${item.secondaryText ?? ""}`;
   if (COMMENT_BAIT_RE.test(fullText)) return DROP("comment bait");

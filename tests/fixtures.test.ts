@@ -81,7 +81,7 @@ describe.skipIf(!have)("captured fixtures", () => {
           const id = `${site}/${file.replace(".json", "")}`;
           const url = urls[id];
           if (!url) continue;
-          const cfg = config({ display: { hideDropped: hide }, tiktok: { ...DEFAULT_CONFIG.tiktok, enabled: false } });
+          const cfg = config({ display: { hideDropped: hide } });
           if (!shouldFilterUrl(new URL(url), cfg)) continue;
 
           const body = readFileSync(path.join(dir, site, file), "utf8");

@@ -25,7 +25,6 @@ describe("createMemoryStore", () => {
     expect(store.getCreatorVerdict("youtube", "goodmaker")).toBe("keep");
     // Creator memory is per site: a YouTube verdict never applies to other sites.
     expect(store.getCreatorVerdict("instagram", "goodmaker")).toBeUndefined();
-    expect(store.getCreatorVerdict("tiktok", "goodmaker")).toBeUndefined();
   });
 
   it("promotes consistently low-caliber creators to drop after 5 drops and leaves mixed creators unpromoted", async () => {

@@ -174,14 +174,16 @@ async function initOptions(): Promise<void> {
   });
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  function scheduleSave(immediate = false): void {
+  // Taste edits clear old verdicts once, when you finish (leave the box or press Save), not per keystroke.
+  let tasteDirty = false;
+  function scheduleSave(immediate = false, commit = immediate): void {
     if (saveIndicator) saveIndicator.textContent = "saving...";
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       // Re-read so changes made elsewhere since this tab opened are not written back stale.
       const fresh = mergeConfig((await chrome.storage.local.get("sieveConfig")).sieveConfig);
       // Old verdicts were graded under the old rubric, so drop them when it changes.
-      const rubricChanged = fresh.grader.rubric !== rubricEl.value || fresh.grader.aboutMe !== aboutEl.value;
+      if (fresh.grader.rubric !== rubricEl.value || fresh.grader.aboutMe !== aboutEl.value) tasteDirty = true;
       const config = fresh;
       config.display.hideDropped = hideDroppedEl.checked;
       config.recorder.enabled = recorderEl.checked;
@@ -202,7 +204,10 @@ async function initOptions(): Promise<void> {
 
       await chrome.storage.local.set({ sieveConfig: config });
       if (saveIndicator) saveIndicator.textContent = "saved locally";
-      if (rubricChanged) void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {});
+      if (commit && tasteDirty) {
+        tasteDirty = false;
+        void chrome.runtime.sendMessage({ type: "CLEAR_VERDICT_CACHE" }).catch(() => {});
+      }
     }, immediate ? 0 : 180);
   }
 
@@ -248,7 +253,7 @@ async function initOptions(): Promise<void> {
     blockEl,
   ]) {
     el.addEventListener("input", () => scheduleSave());
-    el.addEventListener("change", () => scheduleSave());
+    el.addEventListener("change", () => scheduleSave(false, true));
   }
 
   document.getElementById("save-rubric")?.addEventListener("click", () => scheduleSave(true));

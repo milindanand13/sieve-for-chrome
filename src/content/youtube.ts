@@ -27,16 +27,19 @@ const evaluatedDomVideos = new Set<string>();
 const dearrowCheckedVideos = new Set<string>();
 const dearrowThumbs = new Map<string, string>(); // video id -> DeArrow frame url ("" = none)
 let thumbRequestInFlight = false;
+const vidOf = (img: HTMLImageElement): string => /ytimg\.com\/vi(?:_webp)?\/([\w-]{11})\//.exec(img.src)?.[1] ?? "";
 
 /** Swaps in the frame DeArrow volunteers picked, when one exists; mid-frame stays the fallback. */
 async function applyDeArrowThumbs(): Promise<void> {
   if (!activeConfig?.enabled || !activeConfig.youtube.enabled || !activeConfig.youtube.midFrameThumbs) return;
-  const imgs = [...document.querySelectorAll<HTMLImageElement>('img[src*="ytimg.com/vi/"]:not([data-sieve-dearrow])')];
-  const vidOf = (img: HTMLImageElement): string => /ytimg\.com\/vi(?:_webp)?\/([\w-]{11})\//.exec(img.src)?.[1] ?? "";
+  // Tagged with the video id, not "done": YouTube reuses image elements for other videos.
+  const imgs = [...document.querySelectorAll<HTMLImageElement>('img[src*="ytimg.com/vi"]')].filter(
+    (img) => img.dataset.sieveDearrow !== vidOf(img),
+  );
   for (const img of imgs) {
     const url = dearrowThumbs.get(vidOf(img));
     if (url === undefined) continue;
-    img.dataset.sieveDearrow = "1";
+    img.dataset.sieveDearrow = vidOf(img);
     if (url) {
       img.dataset.sieveOrigSrc = img.src;
       img.removeAttribute("srcset");
@@ -244,9 +247,11 @@ function polishRenderedCards(): void {
 
   if (activeConfig.youtube.midFrameThumbs) {
     document
-      .querySelectorAll<HTMLImageElement>('img[src*="ytimg.com/vi"]:not([data-sieve-thumb])')
+      .querySelectorAll<HTMLImageElement>('img[src*="ytimg.com/vi"]')
       .forEach((img) => {
-        img.dataset.sieveThumb = "1";
+        // Already swapped, or the mid-frame failed and fell back: a reused image gets a new src.
+        if (img.dataset.sieveThumb === img.src || img.dataset.sieveFallback === img.src) return;
+        img.dataset.sieveThumb = img.src;
         if (img.src.includes("/hq2.jpg")) return;
         const next = midFrameThumbUrl(img.src);
         if (next !== img.src) img.src = next;
